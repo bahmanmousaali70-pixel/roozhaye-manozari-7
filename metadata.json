@@ -1,0 +1,8 @@
+{
+  "name": "روزهای من و زری",
+  "description": "برنامه هدفمند روزانه، شکرگذاری، پیام‌های صبحگاهی و انرژی‌بخش با کتابخانه صوتی روان فارسی و اعلام نام تماس‌گیرندگان فارسی و لاتین (آفلاین و آنلاین)",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

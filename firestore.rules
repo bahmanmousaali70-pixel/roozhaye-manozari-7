@@ -1,0 +1,372 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global safety net: deny everything not explicitly permitted
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSpaceMember(spaceId) {
+      return isVerifiedUser()
+        && exists(/databases/$(database)/documents/spaces/$(spaceId)/members/$(request.auth.uid));
+    }
+
+    function isValidUserProfile(data, userId) {
+      return data.keys().hasAll(['uid', 'email', 'displayName', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'email', 'displayName', 'activeSpaceId', 'createdAt', 'updatedAt'])
+        && data.uid is string && data.uid == userId && data.uid == request.auth.uid && isValidId(data.uid)
+        && data.email is string && data.email.size() <= 254 && data.email == request.auth.token.email
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 100
+        && (!('activeSpaceId' in data) || (data.activeSpaceId is string && isValidId(data.activeSpaceId)))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidSpace(data) {
+      return data.keys().hasAll(['ownerUid', 'ownerEmail', 'title', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['ownerUid', 'ownerEmail', 'partnerEmail', 'title', 'createdAt', 'updatedAt'])
+        && data.ownerUid is string && isValidId(data.ownerUid)
+        && data.ownerEmail is string && data.ownerEmail.size() >= 3 && data.ownerEmail.size() <= 254
+        && (!('partnerEmail' in data) || (data.partnerEmail is string && data.partnerEmail.size() <= 254))
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 120
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidMember(data, memberUid) {
+      return data.keys().hasAll(['uid', 'email', 'displayName', 'role', 'joinedAt'])
+        && data.keys().hasOnly(['uid', 'email', 'displayName', 'role', 'joinedAt'])
+        && data.uid is string && data.uid == memberUid && data.uid == request.auth.uid && isValidId(data.uid)
+        && data.email is string && data.email.size() <= 254 && data.email == request.auth.token.email
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 100
+        && data.role is string && data.role in ['owner', 'partner']
+        && data.joinedAt is timestamp;
+    }
+
+    function isValidGoal(data, goalId) {
+      return data.keys().hasAll(['id', 'title', 'owner', 'category', 'timeBlock', 'priority', 'completed', 'dateKey', 'clientCreatedAt', 'authorUid', 'updatedByUid', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'title', 'owner', 'scope', 'category', 'timeBlock', 'priority', 'completed', 'dateKey', 'reminderTime', 'reminderVoice', 'clientCreatedAt', 'authorUid', 'updatedByUid', 'createdAt', 'updatedAt'])
+        && data.id is string && data.id == goalId && isValidId(data.id)
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 300
+        && data.owner is string && data.owner in ['man', 'zari', 'both']
+        && (!('scope' in data) || (data.scope is string && data.scope in ['home', 'work']))
+        && data.category is string && data.category in ['purpose', 'health', 'relationship', 'work', 'growth']
+        && data.timeBlock is string && data.timeBlock in ['morning', 'afternoon', 'evening']
+        && data.priority is string && data.priority in ['high', 'normal']
+        && data.completed is bool
+        && data.dateKey is string && data.dateKey.size() >= 8 && data.dateKey.size() <= 20
+        && (!('reminderTime' in data) || (data.reminderTime is string && data.reminderTime.size() <= 10 && data.reminderTime.matches('^(\\d{2}:\\d{2})?$')))
+        && (!('reminderVoice' in data) || (data.reminderVoice is string && data.reminderVoice in ['Kore', 'Zephyr', 'Puck', 'Charon', 'Fenrir']))
+        && data.clientCreatedAt is number
+        && data.authorUid is string && isValidId(data.authorUid)
+        && data.updatedByUid is string && data.updatedByUid == request.auth.uid && isValidId(data.updatedByUid)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidHabit(data, habitId) {
+      return data.keys().hasAll(['id', 'title', 'owner', 'completedDates', 'authorUid', 'updatedByUid', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'title', 'owner', 'completedDates', 'authorUid', 'updatedByUid', 'createdAt', 'updatedAt'])
+        && data.id is string && data.id == habitId && isValidId(data.id)
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 200
+        && data.owner is string && data.owner in ['man', 'zari', 'both']
+        && data.completedDates is list && data.completedDates.size() <= 365
+        && (data.completedDates.size() == 0 || (data.completedDates[0] is string && data.completedDates[0].size() <= 20))
+        && data.authorUid is string && isValidId(data.authorUid)
+        && data.updatedByUid is string && data.updatedByUid == request.auth.uid && isValidId(data.updatedByUid)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidGratitude(data, entryId) {
+      return data.keys().hasAll(['id', 'dateKey', 'jalaliDate', 'author', 'mood', 'items', 'loveNote', 'clientCreatedAt', 'authorUid', 'updatedByUid', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'dateKey', 'jalaliDate', 'author', 'mood', 'items', 'loveNote', 'clientCreatedAt', 'authorUid', 'updatedByUid', 'createdAt', 'updatedAt'])
+        && data.id is string && data.id == entryId && isValidId(data.id)
+        && data.dateKey is string && data.dateKey.size() >= 8 && data.dateKey.size() <= 20
+        && data.jalaliDate is string && data.jalaliDate.size() >= 1 && data.jalaliDate.size() <= 80
+        && data.author is string && data.author in ['man', 'zari', 'both']
+        && data.mood is string && data.mood in ['energetic', 'grateful', 'calm', 'focused', 'needs_boost']
+        && data.items is list && data.items.size() == 3
+        && data.items[0] is string && data.items[0].size() <= 300
+        && data.items[1] is string && data.items[1].size() <= 300
+        && data.items[2] is string && data.items[2].size() <= 300
+        && data.loveNote is string && data.loveNote.size() <= 600
+        && data.clientCreatedAt is number
+        && data.authorUid is string && isValidId(data.authorUid)
+        && data.updatedByUid is string && data.updatedByUid == request.auth.uid && isValidId(data.updatedByUid)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidCaller(data, callerId) {
+      return data.keys().hasAll(['id', 'name', 'relation', 'template', 'repeatCount', 'chimeStyle', 'voiceName', 'favorite', 'authorUid', 'updatedByUid', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'name', 'latinAlias', 'persianPhonetic', 'relation', 'template', 'repeatCount', 'chimeStyle', 'voiceName', 'favorite', 'authorUid', 'updatedByUid', 'createdAt', 'updatedAt'])
+        && data.id is string && data.id == callerId && isValidId(data.id)
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 120
+        && (!('latinAlias' in data) || (data.latinAlias is string && data.latinAlias.size() <= 120))
+        && (!('persianPhonetic' in data) || (data.persianPhonetic is string && data.persianPhonetic.size() <= 120))
+        && data.relation is string && data.relation.size() <= 80
+        && data.template is string && data.template.size() >= 1 && data.template.size() <= 240
+        && data.repeatCount is number && data.repeatCount in [1, 2]
+        && data.chimeStyle is string && data.chimeStyle in ['gentle', 'classic', 'chime']
+        && data.voiceName is string && data.voiceName in ['Kore', 'Zephyr', 'Puck', 'Charon', 'Fenrir']
+        && data.favorite is bool
+        && data.authorUid is string && isValidId(data.authorUid)
+        && data.updatedByUid is string && data.updatedByUid == request.auth.uid && isValidId(data.updatedByUid)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidSchedule(data, scheduleId) {
+      return data.keys().hasAll(['id', 'title', 'topic', 'time', 'enabled', 'voiceName', 'days', 'authorUid', 'updatedByUid', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'title', 'topic', 'time', 'enabled', 'voiceName', 'customText', 'days', 'lastTriggeredDate', 'authorUid', 'updatedByUid', 'createdAt', 'updatedAt'])
+        && data.id is string && data.id == scheduleId && isValidId(data.id)
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 140
+        && data.topic is string && data.topic in ['morning', 'goals', 'gratitude', 'energy', 'night_movies', 'custom']
+        && data.time is string && data.time.matches('^\\d{2}:\\d{2}$')
+        && data.enabled is bool
+        && data.voiceName is string && data.voiceName in ['Kore', 'Zephyr', 'Puck', 'Charon', 'Fenrir']
+        && (!('customText' in data) || (data.customText is string && data.customText.size() <= 600))
+        && data.days is string && data.days in ['daily', 'weekdays', 'weekends']
+        && (!('lastTriggeredDate' in data) || (data.lastTriggeredDate is string && data.lastTriggeredDate.size() <= 20))
+        && data.authorUid is string && isValidId(data.authorUid)
+        && data.updatedByUid is string && data.updatedByUid == request.auth.uid && isValidId(data.updatedByUid)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidSpaceSettings(data) {
+      return data.keys().hasAll(['theme', 'defaultVoice', 'speechRate', 'myName', 'partnerName', 'backgroundKeepAlive', 'updatedByUid', 'updatedAt'])
+        && data.keys().hasOnly(['theme', 'defaultVoice', 'speechRate', 'myName', 'partnerName', 'backgroundKeepAlive', 'announceCalls', 'announceSms', 'autoOpenMorning', 'nightMovieAutoCheck', 'nightMovieTime', 'updatedByUid', 'updatedAt'])
+        && data.theme is string && data.theme in ['light', 'dark']
+        && data.defaultVoice is string && data.defaultVoice in ['Kore', 'Zephyr', 'Puck', 'Charon', 'Fenrir']
+        && data.speechRate is number && data.speechRate >= 0.5 && data.speechRate <= 2.0
+        && data.myName is string && data.myName.size() >= 1 && data.myName.size() <= 60
+        && data.partnerName is string && data.partnerName.size() >= 1 && data.partnerName.size() <= 60
+        && data.backgroundKeepAlive is bool
+        && (!('announceCalls' in data) || data.announceCalls is bool)
+        && (!('announceSms' in data) || data.announceSms is bool)
+        && (!('autoOpenMorning' in data) || data.autoOpenMorning is bool)
+        && (!('nightMovieAutoCheck' in data) || data.nightMovieAutoCheck is bool)
+        && (!('nightMovieTime' in data) || (data.nightMovieTime is string && data.nightMovieTime.size() <= 10 && data.nightMovieTime.matches('^\\d{2}:\\d{2}$')))
+        && data.updatedByUid is string && data.updatedByUid == request.auth.uid && isValidId(data.updatedByUid)
+        && data.updatedAt is timestamp;
+    }
+
+    match /users/{userId} {
+      allow get: if isVerifiedUser() && isValidId(userId) && request.auth.uid == userId;
+      allow create: if isVerifiedUser()
+        && isValidId(userId)
+        && request.auth.uid == userId
+        && isValidUserProfile(incoming(), userId)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isVerifiedUser()
+        && isValidId(userId)
+        && request.auth.uid == userId
+        && isValidUserProfile(incoming(), userId)
+        && incoming().uid == existing().uid
+        && incoming().email == existing().email
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'activeSpaceId', 'updatedAt']);
+    }
+
+    match /spaces/{spaceId} {
+      allow get: if isVerifiedUser()
+        && isValidId(spaceId)
+        && (
+          existing().ownerUid == request.auth.uid
+          || (('partnerEmail' in existing()) && existing().partnerEmail == request.auth.token.email)
+          || isSpaceMember(spaceId)
+        );
+      allow list: if isVerifiedUser()
+        && (
+          resource.data.ownerUid == request.auth.uid
+          || resource.data.partnerEmail == request.auth.token.email
+        );
+      allow create: if isVerifiedUser()
+        && isValidId(spaceId)
+        && isValidSpace(incoming())
+        && incoming().ownerUid == request.auth.uid
+        && incoming().ownerEmail == request.auth.token.email
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isVerifiedUser()
+        && isValidId(spaceId)
+        && isValidSpace(incoming())
+        && existing().ownerUid == request.auth.uid
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().ownerEmail == existing().ownerEmail
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['partnerEmail', 'title', 'updatedAt']);
+
+      match /members/{memberUid} {
+        allow get: if isVerifiedUser() && isValidId(spaceId) && isValidId(memberUid) && isSpaceMember(spaceId);
+        allow list: if isVerifiedUser() && isSpaceMember(spaceId) && resource.data.uid is string;
+        allow create: if isVerifiedUser()
+          && isValidId(spaceId)
+          && isValidId(memberUid)
+          && memberUid == request.auth.uid
+          && isValidMember(incoming(), memberUid)
+          && incoming().joinedAt == request.time
+          && exists(/databases/$(database)/documents/spaces/$(spaceId))
+          && (
+            (incoming().role == 'owner'
+              && get(/databases/$(database)/documents/spaces/$(spaceId)).data.ownerUid == request.auth.uid)
+            || (incoming().role == 'partner'
+              && ('partnerEmail' in get(/databases/$(database)/documents/spaces/$(spaceId)).data)
+              && get(/databases/$(database)/documents/spaces/$(spaceId)).data.partnerEmail == request.auth.token.email)
+          );
+      }
+
+      match /goals/{goalId} {
+        allow get: if isVerifiedUser() && isValidId(spaceId) && isValidId(goalId) && isSpaceMember(spaceId);
+        allow list: if isVerifiedUser() && isSpaceMember(spaceId) && resource.data.authorUid is string;
+        allow create: if isVerifiedUser()
+          && isValidId(spaceId)
+          && isValidId(goalId)
+          && isSpaceMember(spaceId)
+          && isValidGoal(incoming(), goalId)
+          && incoming().authorUid == request.auth.uid
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isVerifiedUser()
+          && isValidId(spaceId)
+          && isValidId(goalId)
+          && isSpaceMember(spaceId)
+          && isValidGoal(incoming(), goalId)
+          && incoming().id == existing().id
+          && incoming().authorUid == existing().authorUid
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly(['title', 'owner', 'scope', 'category', 'timeBlock', 'priority', 'completed', 'dateKey', 'reminderTime', 'reminderVoice', 'updatedByUid', 'updatedAt']);
+        allow delete: if isVerifiedUser() && isValidId(spaceId) && isValidId(goalId) && isSpaceMember(spaceId);
+      }
+
+      match /habits/{habitId} {
+        allow get: if isVerifiedUser() && isValidId(spaceId) && isValidId(habitId) && isSpaceMember(spaceId);
+        allow list: if isVerifiedUser() && isSpaceMember(spaceId) && resource.data.authorUid is string;
+        allow create: if isVerifiedUser()
+          && isValidId(spaceId)
+          && isValidId(habitId)
+          && isSpaceMember(spaceId)
+          && isValidHabit(incoming(), habitId)
+          && incoming().authorUid == request.auth.uid
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isVerifiedUser()
+          && isValidId(spaceId)
+          && isValidId(habitId)
+          && isSpaceMember(spaceId)
+          && isValidHabit(incoming(), habitId)
+          && incoming().id == existing().id
+          && incoming().authorUid == existing().authorUid
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly(['title', 'owner', 'completedDates', 'updatedByUid', 'updatedAt']);
+        allow delete: if isVerifiedUser() && isValidId(spaceId) && isValidId(habitId) && isSpaceMember(spaceId);
+      }
+
+      match /gratitudes/{entryId} {
+        allow get: if isVerifiedUser() && isValidId(spaceId) && isValidId(entryId) && isSpaceMember(spaceId);
+        allow list: if isVerifiedUser() && isSpaceMember(spaceId) && resource.data.authorUid is string;
+        allow create: if isVerifiedUser()
+          && isValidId(spaceId)
+          && isValidId(entryId)
+          && isSpaceMember(spaceId)
+          && isValidGratitude(incoming(), entryId)
+          && incoming().authorUid == request.auth.uid
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow delete: if isVerifiedUser() && isValidId(spaceId) && isValidId(entryId) && isSpaceMember(spaceId);
+      }
+
+      match /callers/{callerId} {
+        allow get: if isVerifiedUser() && isValidId(spaceId) && isValidId(callerId) && isSpaceMember(spaceId);
+        allow list: if isVerifiedUser() && isSpaceMember(spaceId) && resource.data.authorUid is string;
+        allow create: if isVerifiedUser()
+          && isValidId(spaceId)
+          && isValidId(callerId)
+          && isSpaceMember(spaceId)
+          && isValidCaller(incoming(), callerId)
+          && incoming().authorUid == request.auth.uid
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isVerifiedUser()
+          && isValidId(spaceId)
+          && isValidId(callerId)
+          && isSpaceMember(spaceId)
+          && isValidCaller(incoming(), callerId)
+          && incoming().id == existing().id
+          && incoming().authorUid == existing().authorUid
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'latinAlias', 'persianPhonetic', 'relation', 'template', 'repeatCount', 'chimeStyle', 'voiceName', 'favorite', 'updatedByUid', 'updatedAt']);
+        allow delete: if isVerifiedUser() && isValidId(spaceId) && isValidId(callerId) && isSpaceMember(spaceId);
+      }
+
+      match /schedules/{scheduleId} {
+        allow get: if isVerifiedUser() && isValidId(spaceId) && isValidId(scheduleId) && isSpaceMember(spaceId);
+        allow list: if isVerifiedUser() && isSpaceMember(spaceId) && resource.data.authorUid is string;
+        allow create: if isVerifiedUser()
+          && isValidId(spaceId)
+          && isValidId(scheduleId)
+          && isSpaceMember(spaceId)
+          && isValidSchedule(incoming(), scheduleId)
+          && incoming().authorUid == request.auth.uid
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isVerifiedUser()
+          && isValidId(spaceId)
+          && isValidId(scheduleId)
+          && isSpaceMember(spaceId)
+          && isValidSchedule(incoming(), scheduleId)
+          && incoming().id == existing().id
+          && incoming().authorUid == existing().authorUid
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly(['title', 'topic', 'time', 'enabled', 'voiceName', 'customText', 'days', 'lastTriggeredDate', 'updatedByUid', 'updatedAt']);
+        allow delete: if isVerifiedUser() && isValidId(spaceId) && isValidId(scheduleId) && isSpaceMember(spaceId);
+      }
+
+      match /config/{configId} {
+        allow get: if isVerifiedUser() && isValidId(spaceId) && configId == 'settings' && isSpaceMember(spaceId);
+        allow create: if isVerifiedUser()
+          && isValidId(spaceId)
+          && configId == 'settings'
+          && isSpaceMember(spaceId)
+          && isValidSpaceSettings(incoming())
+          && incoming().updatedAt == request.time;
+        allow update: if isVerifiedUser()
+          && isValidId(spaceId)
+          && configId == 'settings'
+          && isSpaceMember(spaceId)
+          && isValidSpaceSettings(incoming())
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly(['theme', 'defaultVoice', 'speechRate', 'myName', 'partnerName', 'backgroundKeepAlive', 'announceCalls', 'announceSms', 'autoOpenMorning', 'nightMovieAutoCheck', 'nightMovieTime', 'updatedByUid', 'updatedAt']);
+      }
+    }
+  }
+}

@@ -1,0 +1,207 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Private profile linking a signed-in user to their shared couple space.",
+      "type": "object",
+      "properties": {
+        "uid": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$"},
+        "email": {"type": "string", "format": "email", "maxLength": 254},
+        "displayName": {"type": "string", "maxLength": 100},
+        "activeSpaceId": {"type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$"},
+        "createdAt": {"type": "string", "format": "date-time"},
+        "updatedAt": {"type": "string", "format": "date-time"}
+      },
+      "required": ["uid", "email", "displayName", "createdAt", "updatedAt"]
+    },
+    "CoupleSpace": {
+      "title": "CoupleSpace",
+      "description": "Shared couple workspace between Mahdi and Zari for real-time cross-device sync.",
+      "type": "object",
+      "properties": {
+        "ownerUid": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$"},
+        "ownerEmail": {"type": "string", "format": "email", "maxLength": 254},
+        "partnerEmail": {"type": "string", "maxLength": 254},
+        "title": {"type": "string", "minLength": 1, "maxLength": 120},
+        "createdAt": {"type": "string", "format": "date-time"},
+        "updatedAt": {"type": "string", "format": "date-time"}
+      },
+      "required": ["ownerUid", "ownerEmail", "title", "createdAt", "updatedAt"]
+    },
+    "SpaceMember": {
+      "title": "SpaceMember",
+      "description": "Authorized member belonging to a shared couple space.",
+      "type": "object",
+      "properties": {
+        "uid": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$"},
+        "email": {"type": "string", "format": "email", "maxLength": 254},
+        "displayName": {"type": "string", "maxLength": 100},
+        "role": {"type": "string", "enum": ["owner", "partner"]},
+        "joinedAt": {"type": "string", "format": "date-time"}
+      },
+      "required": ["uid", "email", "displayName", "role", "joinedAt"]
+    },
+    "GoalRecord": {
+      "title": "GoalRecord",
+      "description": "Daily purposeful goal item synced across both devices.",
+      "type": "object",
+      "properties": {
+        "id": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$"},
+        "title": {"type": "string", "minLength": 1, "maxLength": 300},
+        "owner": {"type": "string", "enum": ["man", "zari", "both"]},
+        "scope": {"type": "string", "enum": ["home", "work"]},
+        "category": {"type": "string", "enum": ["purpose", "health", "relationship", "work", "growth"]},
+        "timeBlock": {"type": "string", "enum": ["morning", "afternoon", "evening"]},
+        "priority": {"type": "string", "enum": ["high", "normal"]},
+        "completed": {"type": "boolean"},
+        "dateKey": {"type": "string", "maxLength": 20},
+        "reminderTime": {"type": "string", "maxLength": 10},
+        "reminderVoice": {"type": "string", "enum": ["Kore", "Zephyr", "Puck", "Charon", "Fenrir"]},
+        "clientCreatedAt": {"type": "number"},
+        "authorUid": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$"},
+        "updatedByUid": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$"},
+        "createdAt": {"type": "string", "format": "date-time"},
+        "updatedAt": {"type": "string", "format": "date-time"}
+      },
+      "required": ["id", "title", "owner", "category", "timeBlock", "priority", "completed", "dateKey", "clientCreatedAt", "authorUid", "updatedByUid", "createdAt", "updatedAt"]
+    },
+    "HabitRecord": {
+      "title": "HabitRecord",
+      "description": "Daily habit tracker synced across both devices.",
+      "type": "object",
+      "properties": {
+        "id": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$"},
+        "title": {"type": "string", "minLength": 1, "maxLength": 200},
+        "owner": {"type": "string", "enum": ["man", "zari", "both"]},
+        "completedDates": {"type": "array"},
+        "authorUid": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$"},
+        "updatedByUid": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$"},
+        "createdAt": {"type": "string", "format": "date-time"},
+        "updatedAt": {"type": "string", "format": "date-time"}
+      },
+      "required": ["id", "title", "owner", "completedDates", "authorUid", "updatedByUid", "createdAt", "updatedAt"]
+    },
+    "GratitudeRecord": {
+      "title": "GratitudeRecord",
+      "description": "Daily gratitude and love note entry.",
+      "type": "object",
+      "properties": {
+        "id": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$"},
+        "dateKey": {"type": "string", "maxLength": 20},
+        "jalaliDate": {"type": "string", "maxLength": 80},
+        "author": {"type": "string", "enum": ["man", "zari", "both"]},
+        "mood": {"type": "string", "enum": ["energetic", "grateful", "calm", "focused", "needs_boost"]},
+        "items": {"type": "array"},
+        "loveNote": {"type": "string", "maxLength": 600},
+        "clientCreatedAt": {"type": "number"},
+        "authorUid": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$"},
+        "updatedByUid": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$"},
+        "createdAt": {"type": "string", "format": "date-time"},
+        "updatedAt": {"type": "string", "format": "date-time"}
+      },
+      "required": ["id", "dateKey", "jalaliDate", "author", "mood", "items", "loveNote", "clientCreatedAt", "authorUid", "updatedByUid", "createdAt", "updatedAt"]
+    },
+    "CallerRecord": {
+      "title": "CallerRecord",
+      "description": "Bilingual caller announcement contact configuration.",
+      "type": "object",
+      "properties": {
+        "id": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$"},
+        "name": {"type": "string", "minLength": 1, "maxLength": 120},
+        "latinAlias": {"type": "string", "maxLength": 120},
+        "persianPhonetic": {"type": "string", "maxLength": 120},
+        "relation": {"type": "string", "maxLength": 80},
+        "template": {"type": "string", "minLength": 1, "maxLength": 240},
+        "repeatCount": {"type": "number"},
+        "chimeStyle": {"type": "string", "enum": ["gentle", "classic", "chime"]},
+        "voiceName": {"type": "string", "enum": ["Kore", "Zephyr", "Puck", "Charon", "Fenrir"]},
+        "favorite": {"type": "boolean"},
+        "authorUid": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$"},
+        "updatedByUid": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$"},
+        "createdAt": {"type": "string", "format": "date-time"},
+        "updatedAt": {"type": "string", "format": "date-time"}
+      },
+      "required": ["id", "name", "relation", "template", "repeatCount", "chimeStyle", "voiceName", "favorite", "authorUid", "updatedByUid", "createdAt", "updatedAt"]
+    },
+    "ScheduleRecord": {
+      "title": "ScheduleRecord",
+      "description": "Daily scheduled announcement rule synced across both devices.",
+      "type": "object",
+      "properties": {
+        "id": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$"},
+        "title": {"type": "string", "minLength": 1, "maxLength": 140},
+        "topic": {"type": "string", "enum": ["morning", "goals", "gratitude", "energy", "night_movies", "custom"]},
+        "time": {"type": "string", "pattern": "^\\d{2}:\\d{2}$"},
+        "enabled": {"type": "boolean"},
+        "voiceName": {"type": "string", "enum": ["Kore", "Zephyr", "Puck", "Charon", "Fenrir"]},
+        "customText": {"type": "string", "maxLength": 600},
+        "days": {"type": "string", "enum": ["daily", "weekdays", "weekends"]},
+        "lastTriggeredDate": {"type": "string", "maxLength": 20},
+        "authorUid": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$"},
+        "updatedByUid": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$"},
+        "createdAt": {"type": "string", "format": "date-time"},
+        "updatedAt": {"type": "string", "format": "date-time"}
+      },
+      "required": ["id", "title", "topic", "time", "enabled", "voiceName", "days", "authorUid", "updatedByUid", "createdAt", "updatedAt"]
+    },
+    "SpaceSettings": {
+      "title": "SpaceSettings",
+      "description": "Synced app preferences, speaker voice, speech rate, names, call/SMS announcers, morning wake-up, and nightly discovery.",
+      "type": "object",
+      "properties": {
+        "theme": {"type": "string", "enum": ["light", "dark"]},
+        "defaultVoice": {"type": "string", "enum": ["Kore", "Zephyr", "Puck", "Charon", "Fenrir"]},
+        "speechRate": {"type": "number"},
+        "myName": {"type": "string", "minLength": 1, "maxLength": 60},
+        "partnerName": {"type": "string", "minLength": 1, "maxLength": 60},
+        "backgroundKeepAlive": {"type": "boolean"},
+        "announceCalls": {"type": "boolean"},
+        "announceSms": {"type": "boolean"},
+        "autoOpenMorning": {"type": "boolean"},
+        "nightMovieAutoCheck": {"type": "boolean"},
+        "nightMovieTime": {"type": "string", "pattern": "^\\d{2}:\\d{2}$"},
+        "updatedByUid": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$"},
+        "updatedAt": {"type": "string", "format": "date-time"}
+      },
+      "required": ["theme", "defaultVoice", "speechRate", "myName", "partnerName", "backgroundKeepAlive", "updatedByUid", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": {"$ref": "#/entities/UserProfile"},
+      "description": "Private user profile and active space link."
+    },
+    "/spaces/{spaceId}": {
+      "schema": {"$ref": "#/entities/CoupleSpace"},
+      "description": "Shared couple workspace metadata."
+    },
+    "/spaces/{spaceId}/members/{memberUid}": {
+      "schema": {"$ref": "#/entities/SpaceMember"},
+      "description": "Membership registry for couple space."
+    },
+    "/spaces/{spaceId}/goals/{goalId}": {
+      "schema": {"$ref": "#/entities/GoalRecord"},
+      "description": "Synced daily goals."
+    },
+    "/spaces/{spaceId}/habits/{habitId}": {
+      "schema": {"$ref": "#/entities/HabitRecord"},
+      "description": "Synced habits."
+    },
+    "/spaces/{spaceId}/gratitudes/{entryId}": {
+      "schema": {"$ref": "#/entities/GratitudeRecord"},
+      "description": "Synced gratitude entries."
+    },
+    "/spaces/{spaceId}/callers/{callerId}": {
+      "schema": {"$ref": "#/entities/CallerRecord"},
+      "description": "Synced caller announcement contacts."
+    },
+    "/spaces/{spaceId}/schedules/{scheduleId}": {
+      "schema": {"$ref": "#/entities/ScheduleRecord"},
+      "description": "Synced daily announcement schedules."
+    },
+    "/spaces/{spaceId}/config/{configId}": {
+      "schema": {"$ref": "#/entities/SpaceSettings"},
+      "description": "Synced couple space preferences and settings."
+    }
+  }
+}

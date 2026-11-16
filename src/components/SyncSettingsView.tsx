@@ -1,0 +1,975 @@
+import React, {useState} from 'react';
+import {
+  Bell,
+  BellOff,
+  Check,
+  Clock,
+  Cloud,
+  Copy,
+  Download,
+  FileAudio,
+  Link2,
+  LogIn,
+  LogOut,
+  Moon,
+  Play,
+  Plus,
+  Radio,
+  ShieldCheck,
+  Smartphone,
+  Sun,
+  Trash2,
+  Upload,
+} from 'lucide-react';
+import {toPersianDigits, VOICE_PERSONAS} from '../data/persianLibrary';
+import {usePWAInstall} from '../hooks/usePWAInstall';
+import {getCloudApiBaseUrl, setCloudApiBaseUrl} from '../services/apiConfig';
+import type {CoupleSpaceInfo} from '../services/coupleSyncService';
+import {
+  syncServerBaseUrlToNative,
+  type NativeCapabilities,
+} from '../services/nativeAndroidBridge';
+import type {
+  AppSettings,
+  CallerContact,
+  GoalItem,
+  GratitudeEntry,
+  HabitItem,
+  ScheduleTopic,
+  ScheduledAnnouncement,
+  VoiceName,
+} from '../types/app';
+
+interface SyncSettingsViewProps {
+  settings: AppSettings;
+  goals: GoalItem[];
+  habits: HabitItem[];
+  gratitudes: GratitudeEntry[];
+  callers: CallerContact[];
+  schedules: ScheduledAnnouncement[];
+  notifPermission: NotificationPermission;
+  keepAliveActive: boolean;
+  isOnline: boolean;
+  cachedClipsCount: number;
+  cloudUserEmail: string | null;
+  cloudBusy: boolean;
+  spaceInfo: CoupleSpaceInfo | null;
+  nativeCaps: NativeCapabilities;
+  onUpdateSettings: (patch: Partial<AppSettings>) => void;
+  onImportBundle: (payload: {
+    goals?: GoalItem[];
+    habits?: HabitItem[];
+    gratitudes?: GratitudeEntry[];
+    callers?: CallerContact[];
+  }) => void;
+  onRequestNotificationPermission: () => void;
+  onToggleKeepAlive: (enabled: boolean) => void;
+  onAddSchedule: (schedule: Omit<ScheduledAnnouncement, 'id'>) => void;
+  onToggleSchedule: (id: string) => void;
+  onUpdateSchedule: (id: string, patch: Partial<ScheduledAnnouncement>) => void;
+  onDeleteSchedule: (id: string) => void;
+  onTestSchedule: (schedule: ScheduledAnnouncement) => void;
+  onDownloadScheduleAlarm: (schedule: ScheduledAnnouncement) => Promise<void>;
+  onCloudSignIn: () => Promise<void>;
+  onCloudSignOut: () => Promise<void>;
+  onInvitePartner: (email: string) => Promise<void>;
+  onJoinSpaceByCode: (spaceCode: string) => Promise<void>;
+  onPushLocalToCloud: () => Promise<void>;
+  onRequestNativePermissions: () => Promise<void>;
+  onStatusToast: (msg: string) => void;
+}
+
+const TOPIC_LABELS: Record<ScheduleTopic, string> = {
+  morning: 'پیام صبحگاهی',
+  goals: 'اهداف امروز',
+  energy: 'انرژی و انگیزه',
+  gratitude: 'شکرگذاری',
+  night_movies: 'معرفی فیلم و سریال شبانه',
+  custom: 'متن دلخواه',
+};
+
+const DAYS_LABELS: Record<ScheduledAnnouncement['days'], string> = {
+  daily: 'هر روز',
+  weekdays: 'روزهای کاری (شنبه تا چهارشنبه)',
+  weekends: 'آخر هفته (پنج‌شنبه و جمعه)',
+};
+
+export const SyncSettingsView: React.FC<SyncSettingsViewProps> = ({
+  settings,
+  goals,
+  habits,
+  gratitudes,
+  callers,
+  schedules,
+  notifPermission,
+  keepAliveActive,
+  isOnline,
+  cachedClipsCount,
+  cloudUserEmail,
+  cloudBusy,
+  spaceInfo,
+  nativeCaps,
+  onUpdateSettings,
+  onImportBundle,
+  onRequestNotificationPermission,
+  onToggleKeepAlive,
+  onAddSchedule,
+  onToggleSchedule,
+  onUpdateSchedule,
+  onDeleteSchedule,
+  onTestSchedule,
+  onDownloadScheduleAlarm,
+  onCloudSignIn,
+  onCloudSignOut,
+  onInvitePartner,
+  onJoinSpaceByCode,
+  onPushLocalToCloud,
+  onRequestNativePermissions,
+  onStatusToast,
+}) => {
+  const {isInstallable, isInstalled, isIOS, install} = usePWAInstall();
+  const [importText, setImportText] = useState('');
+  const [copied, setCopied] = useState(false);
+  const [copiedSpace, setCopiedSpace] = useState(false);
+
+  const [partnerEmailInput, setPartnerEmailInput] = useState(spaceInfo?.partnerEmail ?? '');
+  const [joinCodeInput, setJoinCodeInput] = useState('');
+  const [serverUrlInput, setServerUrlInput] = useState(() => getCloudApiBaseUrl());
+  const [serverCheckStatus, setServerCheckStatus] = useState<{ok: boolean; msg: string} | null>(null);
+  const [checkingServer, setCheckingServer] = useState(false);
+
+  // New schedule form state
+  const [newTitle, setNewTitle] = useState('');
+  const [newTopic, setNewTopic] = useState<ScheduleTopic>('morning');
+  const [newTime, setNewTime] = useState('08:00');
+  const [newDays, setNewDays] = useState<ScheduledAnnouncement['days']>('daily');
+  const [newVoice, setNewVoice] = useState<VoiceName>(settings.defaultVoice);
+  const [newCustomText, setNewCustomText] = useState('');
+  const [downloadingId, setDownloadingId] = useState<string | null>(null);
+
+  const exportPayload = JSON.stringify(
+    {
+      app: 'roozhaye-man-o-zari',
+      exportedAt: new Date().toISOString(),
+      goals,
+      habits,
+      gratitudes,
+      callers,
+      schedules,
+    },
+    null,
+    2
+  );
+
+  const handleDownloadJson = () => {
+    const blob = new Blob([exportPayload], {type: 'application/json'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `man-o-zari-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    onStatusToast('فایل پشتیبان با موفقیت دانلود شد.');
+  };
+
+  const handleCopyCode = async () => {
+    try {
+      await navigator.clipboard.writeText(exportPayload);
+      setCopied(true);
+      onStatusToast('کد همگام‌سازی کپی شد.');
+      setTimeout(() => setCopied(false), 2500);
+    } catch {
+      onStatusToast('کپی خودکار انجام نشد؛ از دانلود فایل استفاده کنید.');
+    }
+  };
+
+  const handleCopySpaceId = async () => {
+    if (!spaceInfo?.spaceId) return;
+    try {
+      await navigator.clipboard.writeText(spaceInfo.spaceId);
+      setCopiedSpace(true);
+      onStatusToast('کد فضای مشترک کپی شد. می‌توانید برای زری بفرستید.');
+      setTimeout(() => setCopiedSpace(false), 2500);
+    } catch {
+      onStatusToast('لطفاً کد فضای مشترک را دستی کپی کنید.');
+    }
+  };
+
+  const handleImportSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      const parsed = JSON.parse(importText.trim());
+      if (!parsed || typeof parsed !== 'object') {
+        throw new Error('فرمت نامعتبر است');
+      }
+      onImportBundle(parsed);
+      setImportText('');
+      onStatusToast('اطلاعات با داده‌های فعلی شما ادغام و همگام‌سازی شد.');
+    } catch {
+      onStatusToast('متن واردشده معتبر نیست. لطفاً فایل یا کد صحیح همگام‌سازی را وارد کنید.');
+    }
+  };
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text);
+      onImportBundle(parsed);
+      onStatusToast('فایل پشتیبان با موفقیت ادغام شد.');
+    } catch {
+      onStatusToast('فایل انتخاب‌شده معتبر نیست.');
+    }
+    e.target.value = '';
+  };
+
+  const handleCreateSchedule = (e: React.FormEvent) => {
+    e.preventDefault();
+    const title = newTitle.trim() || TOPIC_LABELS[newTopic];
+    if (newTopic === 'custom' && !newCustomText.trim()) {
+      onStatusToast('لطفاً متن اعلان دلخواه را بنویسید.');
+      return;
+    }
+    onAddSchedule({
+      title,
+      topic: newTopic,
+      time: newTime || '08:00',
+      enabled: true,
+      voiceName: newVoice,
+      days: newDays,
+      customText: newTopic === 'custom' ? newCustomText.trim() : undefined,
+    });
+    setNewTitle('');
+    setNewCustomText('');
+    onStatusToast(`زمان‌بندی «${title}» برای ساعت ${toPersianDigits(newTime)} اضافه شد.`);
+  };
+
+  const handleAlarmDownload = async (item: ScheduledAnnouncement) => {
+    setDownloadingId(item.id);
+    try {
+      await onDownloadScheduleAlarm(item);
+    } finally {
+      setDownloadingId(null);
+    }
+  };
+
+  const handleSaveServerUrl = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const normalized = setCloudApiBaseUrl(serverUrlInput);
+    setServerUrlInput(normalized || getCloudApiBaseUrl());
+    const targetBase = normalized || getCloudApiBaseUrl();
+    syncServerBaseUrlToNative(targetBase).catch(() => {});
+    setCheckingServer(true);
+    setServerCheckStatus(null);
+    try {
+      const res = await fetch(`${targetBase}/api/health`);
+      if (!res.ok) {
+        const msg = `سرور پاسخ خطا داد (کد ${res.status}). مطمئن شوید برنامه Publish شده است.`;
+        setServerCheckStatus({ok: false, msg});
+        onStatusToast(msg);
+        return;
+      }
+      const data = (await res.json()) as {ok?: boolean; aiReady?: boolean};
+      if (data.ok) {
+        const msg = data.aiReady
+          ? 'آدرس ذخیره شد و اتصال به سرور صدا برقرار است.'
+          : 'سرور در دسترس است اما کلید سرویس صدا فعال نیست.';
+        setServerCheckStatus({ok: Boolean(data.aiReady), msg});
+        onStatusToast(msg);
+      } else {
+        setServerCheckStatus({ok: false, msg: 'پاسخ نامعتبر از سرور دریافت شد.'});
+        onStatusToast('پاسخ نامعتبر از سرور دریافت شد.');
+      }
+    } catch {
+      const msg = 'خطا در اتصال به سرور. فیلترشکن گوشی را برای برنامه باز بگذارید یا آدرس را بررسی کنید.';
+      setServerCheckStatus({ok: false, msg});
+      onStatusToast(msg);
+    } finally {
+      setCheckingServer(false);
+    }
+  };
+
+  return (
+    <div className="space-y-8">
+      {/* Real-time Cloud Sync between Mahdi & Zari's Phones */}
+      <section className="rounded-2xl bg-white dark:bg-[#121E1C] border border-slate-200/80 dark:border-emerald-950/70 p-6 sm:p-8 space-y-5">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div>
+            <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+              <Cloud className="w-4 h-4 text-emerald-700 dark:text-emerald-400" />
+              <span>همگام‌سازی لحظه‌ای ابری (Firestore) بین گوشی {settings.myName} و {settings.partnerName}</span>
+            </div>
+            <h1 className="mt-2 text-xl sm:text-2xl font-extrabold text-slate-900 dark:text-white">
+              همگام‌سازی خودکار دو گوشی، زمان‌بند و نسخه اندروید (APK)
+            </h1>
+            <p className="mt-1.5 text-sm leading-7 text-slate-600 dark:text-slate-300 max-w-3xl">
+              با ورود به حساب گوگل روی گوشی خودتان و گوشی زری، تمام اهداف، عادت‌ها، شکرگذاری‌ها، زمان‌بندی‌ها، مخاطبین تماس و تنظیمات به‌صورت خودکار بین هر دو دستگاه مچ می‌شوند.
+            </p>
+          </div>
+
+          <div className="shrink-0">
+            {cloudUserEmail ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="min-h-[44px] px-3.5 py-2 rounded-xl bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-800 text-xs font-semibold text-emerald-900 dark:text-emerald-200 flex items-center gap-2">
+                  <Check className="w-4 h-4 text-emerald-600" />
+                  <span dir="ltr">{cloudUserEmail}</span>
+                </div>
+                <button
+                  type="button"
+                  disabled={cloudBusy}
+                  onClick={onCloudSignOut}
+                  className="min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-200 dark:border-emerald-900 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-emerald-950/40 text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
+                >
+                  <LogOut className="w-4 h-4" />
+                  <span>خروج</span>
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                disabled={cloudBusy || !isOnline}
+                onClick={onCloudSignIn}
+                className="min-h-[44px] px-5 py-2.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 text-white text-sm font-semibold flex items-center gap-2 cursor-pointer"
+              >
+                <LogIn className="w-4 h-4" />
+                <span>{cloudBusy ? 'در حال اتصال...' : 'ورود با گوگل برای همگام‌سازی'}</span>
+              </button>
+            )}
+          </div>
+        </div>
+
+        {cloudUserEmail && spaceInfo && (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 pt-4 border-t border-slate-100 dark:border-emerald-950/60">
+            <div className="rounded-xl bg-slate-50/80 dark:bg-[#0B1312] border border-slate-200/80 dark:border-emerald-900/70 p-4 space-y-3">
+              <div className="text-xs font-bold text-slate-900 dark:text-white">
+                ۱. دعوت گوشی زری (مچ شدن خودکار با جیمیل)
+              </div>
+              <p className="text-xs text-slate-600 dark:text-slate-300 leading-5">
+                کافی است ایمیل جیمیل گوشی زری را اینجا ثبت کنید (یا با همین ایمیل در هر دو گوشی وارد شوید) تا گوشی زری به‌محض باز کردن برنامه خودکار به همین فضای مشترک وصل شود.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <input
+                  type="email"
+                  dir="ltr"
+                  value={partnerEmailInput}
+                  onChange={(e) => setPartnerEmailInput(e.target.value)}
+                  placeholder="zari.gmail@gmail.com"
+                  className="flex-1 min-w-[200px] min-h-[44px] px-3 rounded-xl border border-slate-200 dark:border-emerald-900 bg-white dark:bg-[#121E1C] text-xs font-mono-num text-slate-900 dark:text-white"
+                />
+                <button
+                  type="button"
+                  disabled={cloudBusy || !partnerEmailInput.trim()}
+                  onClick={() => onInvitePartner(partnerEmailInput)}
+                  className="min-h-[44px] px-4 rounded-xl bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 text-white text-xs font-semibold cursor-pointer"
+                >
+                  ثبت ایمیل همراه
+                </button>
+              </div>
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-1 text-xs">
+                <span className="text-slate-500 dark:text-slate-400">
+                  کد فضای مشترک:{' '}
+                  <code dir="ltr" className="font-mono-num text-slate-800 dark:text-slate-200">
+                    {spaceInfo.spaceId}
+                  </code>
+                </span>
+                <button
+                  type="button"
+                  onClick={handleCopySpaceId}
+                  className="min-h-[36px] px-2.5 rounded-lg border border-slate-200 dark:border-emerald-900 text-xs text-slate-700 dark:text-slate-200 flex items-center gap-1 cursor-pointer"
+                >
+                  {copiedSpace ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                  <span>کپی کد فضا</span>
+                </button>
+              </div>
+            </div>
+
+            <div className="rounded-xl bg-slate-50/80 dark:bg-[#0B1312] border border-slate-200/80 dark:border-emerald-900/70 p-4 space-y-3">
+              <div className="text-xs font-bold text-slate-900 dark:text-white">
+                ۲. اتصال با کد فضا یا ارسال داده‌های فعلی
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <input
+                  type="text"
+                  dir="ltr"
+                  value={joinCodeInput}
+                  onChange={(e) => setJoinCodeInput(e.target.value)}
+                  placeholder="کد فضای دریافت‌شده از گوشی دیگر"
+                  className="flex-1 min-w-[180px] min-h-[44px] px-3 rounded-xl border border-slate-200 dark:border-emerald-900 bg-white dark:bg-[#121E1C] text-xs font-mono-num text-slate-900 dark:text-white"
+                />
+                <button
+                  type="button"
+                  disabled={cloudBusy || !joinCodeInput.trim()}
+                  onClick={() => onJoinSpaceByCode(joinCodeInput)}
+                  className="min-h-[44px] px-4 rounded-xl border border-slate-200 dark:border-emerald-900 bg-white dark:bg-[#121E1C] hover:bg-slate-100 text-slate-800 dark:text-slate-100 text-xs font-semibold flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                >
+                  <Link2 className="w-3.5 h-3.5" />
+                  <span>اتصال</span>
+                </button>
+              </div>
+              <button
+                type="button"
+                disabled={cloudBusy}
+                onClick={onPushLocalToCloud}
+                className="w-full min-h-[44px] px-4 rounded-xl bg-slate-900 dark:bg-emerald-600 hover:bg-slate-800 dark:hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-semibold cursor-pointer"
+              >
+                همگام‌سازی و ارسال داده‌های فعلی این گوشی به ابر
+              </button>
+            </div>
+          </div>
+        )}
+      </section>
+
+      {/* Native Android APK Capabilities & GitHub Actions APK Build */}
+      <section className="rounded-2xl bg-white dark:bg-[#121E1C] border border-slate-200/80 dark:border-emerald-950/70 p-6 sm:p-8 space-y-5">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+              <Smartphone className="w-4 h-4 text-emerald-700 dark:text-emerald-400" />
+              <span>
+                وضعیت محیط اجرا:{' '}
+                {nativeCaps.isNative ? 'اپلیکیشن بومی اندروید (APK)' : 'نسخه وب / PWA'}
+                {' · '}فایل‌های صوتی آفلاین: {toPersianDigits(cachedClipsCount)} مورد
+              </span>
+            </div>
+            <h2 className="mt-2 text-lg sm:text-xl font-bold text-slate-900 dark:text-white">
+              سرویس دائمی پس‌زمینه، اعلام خودکار تماس ورودی و ساخت فایل APK در گیت‌هاب
+            </h2>
+            <p className="mt-1.5 text-xs sm:text-sm leading-6 text-slate-600 dark:text-slate-300 max-w-3xl">
+              پروژه بومی اندروید (Capacitor + سرویس پس‌زمینه کاتلین + گیرنده تماس ورودی + آلارم دقیق بیدارباش) و گردش‌کار گیت‌هاب (<code dir="ltr">.github/workflows/build-apk.yml</code>) داخل کدهای این برنامه آماده شده است.
+            </p>
+          </div>
+
+          <div className="shrink-0 flex flex-wrap gap-2">
+            {nativeCaps.isNative ? (
+              <button
+                type="button"
+                onClick={onRequestNativePermissions}
+                className="min-h-[44px] px-4 py-2.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs sm:text-sm font-semibold flex items-center gap-2 cursor-pointer"
+              >
+                <ShieldCheck className="w-4 h-4" />
+                <span>اعطای مجوز تماس، باتری و Autostart</span>
+              </button>
+            ) : isInstalled ? (
+              <div className="min-h-[44px] px-4 py-2.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300 text-xs sm:text-sm font-semibold flex items-center gap-2">
+                <Check className="w-4 h-4" />
+                <span>نسخه PWA نصب شده است</span>
+              </div>
+            ) : isInstallable ? (
+              <button
+                type="button"
+                onClick={install}
+                className="min-h-[44px] px-5 py-2.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs sm:text-sm font-semibold flex items-center gap-2 cursor-pointer"
+              >
+                <Download className="w-4 h-4" />
+                <span>نصب وب‌اپ (PWA) روی گوشی</span>
+              </button>
+            ) : (
+              <div className="text-xs text-slate-600 dark:text-slate-300 max-w-xs leading-6">
+                {isIOS
+                  ? 'در Safari دکمه Share و سپس Add to Home Screen را بزنید.'
+                  : 'برای ساخت APK: پروژه را به گیت‌هاب خود بفرستید تا در تب Actions فایل app-debug.apk ساخته و آماده دانلود شود.'}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {nativeCaps.isNative && (
+          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2.5 pt-2">
+            {[
+              {label: 'تشخیص تماس ورودی', ok: nativeCaps.phoneState},
+              {label: 'شماره تماس‌گیرنده', ok: nativeCaps.callLog},
+              {label: 'خواندن پیامک (SMS)', ok: nativeCaps.sms},
+              {label: 'خواندن نام مخاطبین', ok: nativeCaps.contacts},
+              {label: 'اعلان‌های اندروید', ok: nativeCaps.notifications},
+              {label: 'معافیت باتری MIUI', ok: nativeCaps.batteryIgnored},
+              {label: 'باز شدن خودکار صبح', ok: nativeCaps.overlay},
+              {label: 'سرویس دائمی پس‌زمینه', ok: nativeCaps.keepAliveRunning},
+              {label: 'آلارم دقیق صبحگاهی', ok: nativeCaps.exactAlarm},
+            ].map((perm) => (
+              <div
+                key={perm.label}
+                className={`rounded-xl border px-3 py-2.5 text-xs font-semibold ${
+                  perm.ok
+                    ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300'
+                    : 'bg-amber-50 dark:bg-amber-950/30 border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-200'
+                }`}
+              >
+                <div>{perm.label}</div>
+                <div className="mt-0.5 text-[11px] font-normal">
+                  {perm.ok ? 'فعال و آماده' : 'نیاز به تایید'}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <form onSubmit={handleSaveServerUrl} className="rounded-xl bg-slate-50/70 dark:bg-[#0B1312] border border-slate-200/80 dark:border-emerald-900/70 p-4 space-y-2.5">
+          <div className="flex flex-col sm:flex-row sm:items-end gap-3">
+            <div className="flex-1">
+              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                نشانی سرور صدای روان فارسی برای استفاده داخل فایل APK
+              </label>
+              <input
+                type="text"
+                inputMode="url"
+                dir="ltr"
+                value={serverUrlInput}
+                onChange={(e) => setServerUrlInput(e.target.value)}
+                placeholder="https://roozhaye-manozari-7.ai.studio"
+                className="w-full min-h-[44px] px-3 rounded-xl border border-slate-200 dark:border-emerald-900 bg-white dark:bg-[#121E1C] text-xs font-mono-num text-slate-900 dark:text-white"
+              />
+            </div>
+            <button
+              type="submit"
+              disabled={checkingServer}
+              className="min-h-[44px] px-4 rounded-xl bg-slate-900 dark:bg-emerald-700 text-white text-xs font-semibold cursor-pointer shrink-0 disabled:opacity-60"
+            >
+              {checkingServer ? 'در حال بررسی...' : 'ذخیره و تست اتصال سرور'}
+            </button>
+          </div>
+          {serverCheckStatus && (
+            <div
+              className={`text-xs font-medium px-3 py-2 rounded-lg ${
+                serverCheckStatus.ok
+                  ? 'bg-emerald-50 dark:bg-emerald-950/50 text-emerald-800 dark:text-emerald-300'
+                  : 'bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300'
+              }`}
+            >
+              {serverCheckStatus.msg}
+            </div>
+          )}
+        </form>
+      </section>
+
+      {/* Background Scheduler & Daily Announcements */}
+      <section className="rounded-2xl bg-white dark:bg-[#121E1C] border border-slate-200/80 dark:border-emerald-950/70 p-6 sm:p-8 space-y-6">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-slate-100 dark:border-emerald-950/60 pb-5">
+          <div>
+            <h2 className="text-lg sm:text-xl font-bold text-slate-900 dark:text-white">
+              زمان‌بند خودکار و اجرای پس‌زمینه موبایل
+            </h2>
+            <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-300 mt-1 leading-6">
+              ساعت و موضوع اعلام‌ها را تنظیم کنید تا هر روز صبح پیام صبحگاهی، اهداف یا یادآورهای دلخواه به‌صورت خودکار اعلان و پخش شوند.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3 shrink-0">
+            <button
+              type="button"
+              onClick={onRequestNotificationPermission}
+              className={`min-h-[44px] px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold flex items-center gap-2 border cursor-pointer transition-colors ${
+                notifPermission === 'granted'
+                  ? 'bg-emerald-50 dark:bg-emerald-950/50 border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300'
+                  : 'bg-amber-50 dark:bg-amber-950/40 border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-200 hover:bg-amber-100 dark:hover:bg-amber-950/70'
+              }`}
+            >
+              {notifPermission === 'granted' ? <Bell className="w-4 h-4" /> : <BellOff className="w-4 h-4" />}
+              <span>
+                {notifPermission === 'granted' ? 'اعلان‌های گوشی فعال است' : 'فعال‌سازی اعلان‌های گوشی'}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => onToggleKeepAlive(!settings.backgroundKeepAlive)}
+              className={`min-h-[44px] px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold flex items-center gap-2 border cursor-pointer transition-colors ${
+                settings.backgroundKeepAlive
+                  ? 'bg-emerald-700 border-emerald-700 text-white hover:bg-emerald-800'
+                  : 'bg-slate-100 dark:bg-[#0B1312] border-slate-200 dark:border-emerald-900 text-slate-800 dark:text-slate-200 hover:bg-slate-200/70'
+              }`}
+            >
+              <Radio className="w-4 h-4" />
+              <span>
+                {settings.backgroundKeepAlive
+                  ? keepAliveActive || nativeCaps.keepAliveRunning
+                    ? 'سرویس پس‌زمینه: روشن'
+                    : 'سرویس پس‌زمینه: آماده با اولین لمس'
+                  : 'روشن کردن اجرا در پس‌زمینه'}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => onUpdateSettings({autoOpenMorning: !settings.autoOpenMorning})}
+              className={`min-h-[44px] px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold flex items-center gap-2 border cursor-pointer transition-colors ${
+                settings.autoOpenMorning
+                  ? 'bg-emerald-50 dark:bg-emerald-950/50 border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300'
+                  : 'bg-slate-100 dark:bg-[#0B1312] border-slate-200 dark:border-emerald-900 text-slate-700 dark:text-slate-300'
+              }`}
+            >
+              <span>
+                {settings.autoOpenMorning ? 'باز شدن خودکار صبح: فعال' : 'باز شدن خودکار صبح: خاموش'}
+              </span>
+            </button>
+          </div>
+        </div>
+
+        {/* Active Schedules List */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {schedules.map((item) => (
+            <div
+              key={item.id}
+              className={`rounded-xl border p-4 space-y-3 transition-colors ${
+                item.enabled
+                  ? 'bg-slate-50/70 dark:bg-[#0B1312] border-slate-200 dark:border-emerald-900/80'
+                  : 'bg-slate-50/30 dark:bg-[#0B1312]/50 border-slate-200/60 dark:border-emerald-950/50 opacity-75'
+              }`}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="px-2 py-0.5 rounded-md text-[11px] font-semibold bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300">
+                      {TOPIC_LABELS[item.topic]}
+                    </span>
+                    <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                      {DAYS_LABELS[item.days]}
+                    </span>
+                  </div>
+                  <h3 className="mt-1.5 text-sm font-bold text-slate-900 dark:text-white truncate">
+                    {item.title}
+                  </h3>
+                  {item.customText && (
+                    <p className="mt-1 text-xs text-slate-600 dark:text-slate-300 line-clamp-2">
+                      {item.customText}
+                    </p>
+                  )}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => onToggleSchedule(item.id)}
+                  aria-label={item.enabled ? 'غیرفعال کردن زمان‌بندی' : 'فعال کردن زمان‌بندی'}
+                  className={`min-h-[44px] min-w-[68px] px-3 rounded-xl text-xs font-semibold cursor-pointer shrink-0 transition-colors ${
+                    item.enabled
+                      ? 'bg-emerald-700 text-white hover:bg-emerald-800'
+                      : 'bg-slate-200 dark:bg-emerald-950 text-slate-700 dark:text-slate-300'
+                  }`}
+                >
+                  {item.enabled ? 'فعال' : 'خاموش'}
+                </button>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2.5">
+                <div>
+                  <label className="block text-[11px] text-slate-500 dark:text-slate-400 mb-1">
+                    ساعت اعلام
+                  </label>
+                  <div className="relative flex items-center">
+                    <Clock className="w-3.5 h-3.5 text-slate-400 absolute right-3 pointer-events-none" />
+                    <input
+                      type="time"
+                      value={item.time}
+                      onChange={(e) => onUpdateSchedule(item.id, {time: e.target.value})}
+                      className="w-full min-h-[44px] pr-8 pl-2 rounded-xl border border-slate-200 dark:border-emerald-900 bg-white dark:bg-[#121E1C] text-xs font-mono-num text-slate-900 dark:text-white"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-[11px] text-slate-500 dark:text-slate-400 mb-1">
+                    گوینده
+                  </label>
+                  <select
+                    value={item.voiceName}
+                    onChange={(e) => onUpdateSchedule(item.id, {voiceName: e.target.value as VoiceName})}
+                    className="w-full min-h-[44px] px-2.5 rounded-xl border border-slate-200 dark:border-emerald-900 bg-white dark:bg-[#121E1C] text-xs text-slate-800 dark:text-slate-100"
+                  >
+                    {VOICE_PERSONAS.map((v) => (
+                      <option key={v.id} value={v.id}>
+                        {v.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => onTestSchedule(item)}
+                  className="min-h-[44px] flex-1 px-3 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold flex items-center justify-center gap-1.5 cursor-pointer"
+                >
+                  <Play className="w-3.5 h-3.5" />
+                  <span>تست اعلام الان</span>
+                </button>
+
+                <button
+                  type="button"
+                  disabled={downloadingId === item.id}
+                  onClick={() => handleAlarmDownload(item)}
+                  className="min-h-[44px] px-3 rounded-xl border border-slate-200 dark:border-emerald-900 bg-white dark:bg-[#121E1C] hover:bg-slate-50 dark:hover:bg-emerald-950/50 text-slate-700 dark:text-slate-200 text-xs font-medium flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                >
+                  <FileAudio className="w-3.5 h-3.5 text-emerald-700 dark:text-emerald-400" />
+                  <span>{downloadingId === item.id ? 'در حال ساخت...' : 'دانلود زنگ ساعت (.wav)'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => onDeleteSchedule(item.id)}
+                  aria-label="حذف زمان‌بندی"
+                  className="min-h-[44px] min-w-[44px] rounded-xl border border-slate-200 dark:border-emerald-900 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 flex items-center justify-center cursor-pointer"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Add Custom Schedule Form */}
+        <form
+          onSubmit={handleCreateSchedule}
+          className="rounded-xl border border-slate-200/80 dark:border-emerald-900/70 bg-slate-50/50 dark:bg-[#0B1312] p-4 sm:p-5 space-y-4"
+        >
+          <div className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+            <Plus className="w-4 h-4 text-emerald-700 dark:text-emerald-400" />
+            <span>افزودن یادآور و موضوع جدید روزانه</span>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+            <input
+              type="text"
+              value={newTitle}
+              onChange={(e) => setNewTitle(e.target.value)}
+              placeholder="عنوان (مثلاً پیام صبحگاهی زری)"
+              className="lg:col-span-2 min-h-[44px] px-3.5 rounded-xl border border-slate-200 dark:border-emerald-900 bg-white dark:bg-[#121E1C] text-xs sm:text-sm text-slate-900 dark:text-white"
+            />
+
+            <select
+              value={newTopic}
+              onChange={(e) => setNewTopic(e.target.value as ScheduleTopic)}
+              className="min-h-[44px] px-3 rounded-xl border border-slate-200 dark:border-emerald-900 bg-white dark:bg-[#121E1C] text-xs sm:text-sm text-slate-800 dark:text-slate-100"
+            >
+              <option value="morning">موضوع: پیام صبحگاهی</option>
+              <option value="goals">موضوع: مرور اهداف امروز</option>
+              <option value="energy">موضوع: جمله انرژی‌بخش</option>
+              <option value="gratitude">موضوع: شکرگذاری</option>
+              <option value="night_movies">موضوع: فیلم و سریال دوبله شبانه</option>
+              <option value="custom">موضوع: متن دلخواه</option>
+            </select>
+
+            <input
+              type="time"
+              value={newTime}
+              onChange={(e) => setNewTime(e.target.value)}
+              className="min-h-[44px] px-3 rounded-xl border border-slate-200 dark:border-emerald-900 bg-white dark:bg-[#121E1C] text-xs sm:text-sm font-mono-num text-slate-900 dark:text-white"
+            />
+
+            <select
+              value={newDays}
+              onChange={(e) => setNewDays(e.target.value as ScheduledAnnouncement['days'])}
+              className="min-h-[44px] px-3 rounded-xl border border-slate-200 dark:border-emerald-900 bg-white dark:bg-[#121E1C] text-xs text-slate-800 dark:text-slate-100"
+            >
+              <option value="daily">هر روز</option>
+              <option value="weekdays">روزهای کاری</option>
+              <option value="weekends">آخر هفته</option>
+            </select>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-start">
+            <div>
+              <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-300 mb-1">
+                انتخاب گوینده این اعلام
+              </label>
+              <select
+                value={newVoice}
+                onChange={(e) => setNewVoice(e.target.value as VoiceName)}
+                className="w-full min-h-[44px] px-3 rounded-xl border border-slate-200 dark:border-emerald-900 bg-white dark:bg-[#121E1C] text-xs sm:text-sm text-slate-800 dark:text-slate-100"
+              >
+                {VOICE_PERSONAS.map((v) => (
+                  <option key={v.id} value={v.id}>
+                    {v.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {newTopic === 'custom' && (
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-300 mb-1">
+                  متنی که در زمان مقرر خوانده شود
+                </label>
+                <textarea
+                  rows={2}
+                  value={newCustomText}
+                  onChange={(e) => setNewCustomText(e.target.value)}
+                  placeholder="مثلاً: سلام عزیز دلم! وقت نوشیدن آب و استراحت کوتاه است."
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-emerald-900 bg-white dark:bg-[#121E1C] text-xs sm:text-sm text-slate-900 dark:text-white"
+                />
+              </div>
+            )}
+          </div>
+
+          <button
+            type="submit"
+            className="min-h-[44px] px-5 rounded-xl bg-slate-900 dark:bg-emerald-600 hover:bg-slate-800 dark:hover:bg-emerald-700 text-white text-xs sm:text-sm font-semibold inline-flex items-center gap-2 cursor-pointer"
+          >
+            <Plus className="w-4 h-4" />
+            <span>ثبت زمان‌بندی جدید</span>
+          </button>
+        </form>
+
+        {/* Xiaomi Mi 10T Pro / MIUI 14 Background Checklist */}
+        <div className="rounded-xl bg-amber-50/70 dark:bg-amber-950/25 border border-amber-200/80 dark:border-amber-900/50 p-4 sm:p-5 space-y-2.5">
+          <div className="text-xs sm:text-sm font-bold text-amber-950 dark:text-amber-200">
+            تنظیمات لازم در شیائومی Mi 10T Pro (MIUI 14) برای بسته نشدن در پس‌زمینه
+          </div>
+          <ol className="list-decimal list-inside space-y-1.5 text-xs leading-6 text-amber-900 dark:text-amber-100/90">
+            <li>
+              پس از نصب فایل <strong>APK</strong> روی گوشی، وارد تنظیمات برنامه شوید: بخش <strong>صرفه‌جویی باتری</strong> را روی <strong>«بدون محدودیت / No restrictions»</strong> قرار دهید و گزینه <strong>شروع خودکار (Autostart)</strong> را روشن کنید.
+            </li>
+            <li>
+              کلید <strong>«روشن کردن اجرا در پس‌زمینه»</strong> را فعال کنید تا سرویس دائمی اندروید (<code dir="ltr">ForegroundService</code> + آلارم دقیق <code dir="ltr">AlarmManager</code>) همزمان با گوش دادن به تماس‌های ورودی فعال بماند.
+            </li>
+            <li>
+              برای ساخت فایل نصبی <strong>.apk</strong>: پروژه را به مخزن GitHub خود ارسال کنید تا گردش‌کار <code dir="ltr">Build Android APK</code> در تب <strong>Actions</strong> به‌طور خودکار فایل آماده نصب را بسازد.
+            </li>
+          </ol>
+        </div>
+      </section>
+
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        {/* Preferences */}
+        <section className="lg:col-span-5 rounded-2xl bg-white dark:bg-[#121E1C] border border-slate-200/80 dark:border-emerald-950/70 p-6 space-y-5">
+          <h2 className="text-lg font-bold text-slate-900 dark:text-white">شخصی‌سازی و ظاهر</h2>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 dark:text-slate-300 mb-1.5">
+                نام من
+              </label>
+              <input
+                type="text"
+                value={settings.myName}
+                onChange={(e) => onUpdateSettings({myName: e.target.value || 'من'})}
+                className="w-full min-h-[44px] px-3.5 rounded-xl border border-slate-200 dark:border-emerald-900 bg-slate-50/70 dark:bg-[#0B1312] text-sm text-slate-900 dark:text-white"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 dark:text-slate-300 mb-1.5">
+                نام همراه
+              </label>
+              <input
+                type="text"
+                value={settings.partnerName}
+                onChange={(e) => onUpdateSettings({partnerName: e.target.value || 'زری'})}
+                className="w-full min-h-[44px] px-3.5 rounded-xl border border-slate-200 dark:border-emerald-900 bg-slate-50/70 dark:bg-[#0B1312] text-sm text-slate-900 dark:text-white"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-600 dark:text-slate-300 mb-1.5">
+              گوینده پیش‌فرض صدای روان فارسی
+            </label>
+            <select
+              value={settings.defaultVoice}
+              onChange={(e) => onUpdateSettings({defaultVoice: e.target.value as VoiceName})}
+              className="w-full min-h-[44px] px-3.5 rounded-xl border border-slate-200 dark:border-emerald-900 bg-white dark:bg-[#0B1312] text-sm text-slate-800 dark:text-slate-100"
+            >
+              {VOICE_PERSONAS.map((v) => (
+                <option key={v.id} value={v.id}>
+                  {v.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-600 dark:text-slate-300 mb-2">
+              حالت نمایش
+            </label>
+            <div className="grid grid-cols-2 gap-2 p-1 bg-slate-100 dark:bg-emerald-950/70 rounded-xl">
+              <button
+                type="button"
+                onClick={() => onUpdateSettings({theme: 'light'})}
+                className={`min-h-[42px] rounded-lg text-xs font-semibold flex items-center justify-center gap-2 transition-colors cursor-pointer ${
+                  settings.theme === 'light'
+                    ? 'bg-white text-slate-900 shadow-xs'
+                    : 'text-slate-600 dark:text-slate-400'
+                }`}
+              >
+                <Sun className="w-4 h-4" />
+                <span>روز روشن</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => onUpdateSettings({theme: 'dark'})}
+                className={`min-h-[42px] rounded-lg text-xs font-semibold flex items-center justify-center gap-2 transition-colors cursor-pointer ${
+                  settings.theme === 'dark'
+                    ? 'bg-[#172724] text-white shadow-xs'
+                    : 'text-slate-600 dark:text-slate-400'
+                }`}
+              >
+                <Moon className="w-4 h-4" />
+                <span>شب آرام</span>
+              </button>
+            </div>
+          </div>
+        </section>
+
+        {/* Manual JSON Backup (Secondary offline method) */}
+        <section className="lg:col-span-7 rounded-2xl bg-white dark:bg-[#121E1C] border border-slate-200/80 dark:border-emerald-950/70 p-6 space-y-5">
+          <div>
+            <h2 className="text-lg font-bold text-slate-900 dark:text-white">
+              پشتیبان‌گیری دستی و انتقال آفلاین فایل (JSON)
+            </h2>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+              علاوه بر همگام‌سازی خودکار ابری، همیشه می‌توانید یک نسخه فایل پشتیبان در گوشی ذخیره کنید.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              onClick={handleDownloadJson}
+              className="min-h-[44px] px-4 py-2.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs sm:text-sm font-semibold flex items-center gap-2 cursor-pointer"
+            >
+              <Download className="w-4 h-4" />
+              <span>دانلود فایل پشتیبان (JSON)</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleCopyCode}
+              className="min-h-[44px] px-4 py-2.5 rounded-xl border border-slate-200 dark:border-emerald-900 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-emerald-950/40 text-xs sm:text-sm font-medium flex items-center gap-2 cursor-pointer"
+            >
+              {copied ? <Check className="w-4 h-4 text-emerald-600" /> : <Copy className="w-4 h-4" />}
+              <span>کپی کد پشتیبان</span>
+            </button>
+
+            <label className="min-h-[44px] px-4 py-2.5 rounded-xl border border-slate-200 dark:border-emerald-900 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-emerald-950/40 text-xs sm:text-sm font-medium flex items-center gap-2 cursor-pointer">
+              <Upload className="w-4 h-4" />
+              <span>بارگذاری فایل پشتیبان</span>
+              <input type="file" accept=".json,application/json" onChange={handleFileUpload} className="hidden" />
+            </label>
+          </div>
+
+          <form onSubmit={handleImportSubmit} className="pt-4 border-t border-slate-100 dark:border-emerald-950/60 space-y-3">
+            <label className="block text-xs font-semibold text-slate-600 dark:text-slate-300">
+              یا کد پشتیبان دریافت‌شده را اینجا جای‌گذاری کنید
+            </label>
+            <textarea
+              rows={2}
+              value={importText}
+              onChange={(e) => setImportText(e.target.value)}
+              dir="ltr"
+              placeholder='{"app":"roozhaye-man-o-zari", ...}'
+              className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-emerald-900 bg-slate-50/70 dark:bg-[#0B1312] text-xs font-mono-num text-slate-800 dark:text-slate-200"
+            />
+            <button
+              type="submit"
+              disabled={!importText.trim()}
+              className="min-h-[44px] px-5 rounded-xl bg-slate-900 dark:bg-emerald-600 disabled:opacity-50 text-white text-xs sm:text-sm font-semibold cursor-pointer"
+            >
+              ادغام اطلاعات
+            </button>
+          </form>
+        </section>
+      </div>
+    </div>
+  );
+};
