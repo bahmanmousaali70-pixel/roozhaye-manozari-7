@@ -15,6 +15,22 @@ import android.telephony.SmsMessage;
 import androidx.core.content.ContextCompat;
 
 public class IncomingSmsReceiver extends BroadcastReceiver {
+    private static long lastSmsAtMs = 0L;
+    private static String lastSmsFingerprint = "";
+
+    public static synchronized boolean shouldSkipDuplicateSms(String sender, String body) {
+        long now = System.currentTimeMillis();
+        String normSender = sender != null ? sender.trim().toLowerCase() : "";
+        String normBody = body != null ? body.trim().replaceAll("\\s+", " ") : "";
+        String fp = normSender + "::" + normBody;
+        if (now - lastSmsAtMs < 6000L && fp.equals(lastSmsFingerprint)) {
+            return true;
+        }
+        lastSmsAtMs = now;
+        lastSmsFingerprint = fp;
+        return false;
+    }
+
     @Override
     public void onReceive(Context context, Intent intent) {
         if (intent == null || !Telephony.Sms.Intents.SMS_RECEIVED_ACTION.equals(intent.getAction())) {
@@ -49,6 +65,10 @@ public class IncomingSmsReceiver extends BroadcastReceiver {
             senderName = (originatingAddress != null && !originatingAddress.trim().isEmpty())
                     ? originatingAddress.trim()
                     : "فرستنده ناشناس";
+        }
+
+        if (shouldSkipDuplicateSms(senderName, body)) {
+            return;
         }
 
         boolean isMale = "male".equals(prefs.getString("default_voice_gender", "female"));

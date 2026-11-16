@@ -8,6 +8,7 @@ export interface NativeCapabilities {
   callLog: boolean;
   contacts: boolean;
   sms: boolean;
+  notificationListener: boolean;
   notifications: boolean;
   batteryIgnored: boolean;
   overlay: boolean;
@@ -40,6 +41,8 @@ interface NativeCallerPayload {
 interface RoozhayeNativePlugin {
   getNativeCapabilities(): Promise<NativeCapabilities>;
   requestPermissionsAndMiuiSetup(): Promise<NativeCapabilities>;
+  openNotificationListenerSettings(): Promise<{ok: boolean}>;
+  openAppInfoSettings(): Promise<{ok: boolean}>;
   setKeepAliveService(options: {enabled: boolean}): Promise<{running: boolean}>;
   setServerBaseUrl(options: {url: string}): Promise<{ok: boolean}>;
   precacheNativeAudio(options: {text: string; voiceName: string; audioBase64: string}): Promise<{ok: boolean}>;
@@ -87,6 +90,7 @@ export async function getNativeCapabilities(): Promise<NativeCapabilities> {
       callLog: false,
       contacts: false,
       sms: false,
+      notificationListener: false,
       notifications: typeof Notification !== 'undefined' && Notification.permission === 'granted',
       batteryIgnored: false,
       overlay: false,
@@ -95,7 +99,11 @@ export async function getNativeCapabilities(): Promise<NativeCapabilities> {
     };
   }
   try {
-    return await RoozhayeNative.getNativeCapabilities();
+    const caps = await RoozhayeNative.getNativeCapabilities();
+    return {
+      ...caps,
+      notificationListener: Boolean(caps.notificationListener),
+    };
   } catch {
     return {
       isNative: true,
@@ -103,6 +111,7 @@ export async function getNativeCapabilities(): Promise<NativeCapabilities> {
       callLog: false,
       contacts: false,
       sms: false,
+      notificationListener: false,
       notifications: false,
       batteryIgnored: false,
       overlay: false,
@@ -118,6 +127,26 @@ export async function requestNativePermissionsAndMiuiSetup(): Promise<NativeCapa
     return await RoozhayeNative.requestPermissionsAndMiuiSetup();
   } catch {
     return null;
+  }
+}
+
+export async function openNotificationListenerSettings(): Promise<boolean> {
+  if (!isNativeAndroid()) return false;
+  try {
+    const res = await RoozhayeNative.openNotificationListenerSettings();
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function openAppInfoSettings(): Promise<boolean> {
+  if (!isNativeAndroid()) return false;
+  try {
+    const res = await RoozhayeNative.openAppInfoSettings();
+    return res.ok;
+  } catch {
+    return false;
   }
 }
 

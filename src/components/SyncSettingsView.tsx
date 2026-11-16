@@ -76,6 +76,8 @@ interface SyncSettingsViewProps {
   onJoinSpaceByCode: (spaceCode: string) => Promise<void>;
   onPushLocalToCloud: () => Promise<void>;
   onRequestNativePermissions: () => Promise<void>;
+  onOpenNotificationListenerSettings: () => Promise<void>;
+  onOpenAppInfoSettings: () => Promise<void>;
   onStatusToast: (msg: string) => void;
 }
 
@@ -125,6 +127,8 @@ export const SyncSettingsView: React.FC<SyncSettingsViewProps> = ({
   onJoinSpaceByCode,
   onPushLocalToCloud,
   onRequestNativePermissions,
+  onOpenNotificationListenerSettings,
+  onOpenAppInfoSettings,
   onStatusToast,
 }) => {
   const {isInstallable, isInstalled, isIOS, install} = usePWAInstall();
@@ -444,14 +448,31 @@ export const SyncSettingsView: React.FC<SyncSettingsViewProps> = ({
 
           <div className="shrink-0 flex flex-wrap gap-2">
             {nativeCaps.isNative ? (
-              <button
-                type="button"
-                onClick={onRequestNativePermissions}
-                className="min-h-[44px] px-4 py-2.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs sm:text-sm font-semibold flex items-center gap-2 cursor-pointer"
-              >
-                <ShieldCheck className="w-4 h-4" />
-                <span>اعطای مجوز تماس، باتری و Autostart</span>
-              </button>
+              <>
+                <button
+                  type="button"
+                  onClick={onRequestNativePermissions}
+                  className="min-h-[44px] px-4 py-2.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs sm:text-sm font-semibold flex items-center gap-2 cursor-pointer"
+                >
+                  <ShieldCheck className="w-4 h-4" />
+                  <span>مجوز تماس، باتری و Autostart</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={onOpenNotificationListenerSettings}
+                  className="min-h-[44px] px-3.5 py-2.5 rounded-xl bg-slate-900 dark:bg-emerald-800 hover:bg-slate-800 text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Bell className="w-4 h-4" />
+                  <span>فعال‌سازی خواندن پیامک و RCS (اعلان‌ها)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={onOpenAppInfoSettings}
+                  className="min-h-[44px] px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-emerald-900 bg-white dark:bg-[#0B1312] text-slate-700 dark:text-slate-200 text-xs font-semibold cursor-pointer"
+                >
+                  باز کردن تنظیمات محدودشده برنامه
+                </button>
+              </>
             ) : isInstalled ? (
               <div className="min-h-[44px] px-4 py-2.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300 text-xs sm:text-sm font-semibold flex items-center gap-2">
                 <Check className="w-4 h-4" />
@@ -477,14 +498,15 @@ export const SyncSettingsView: React.FC<SyncSettingsViewProps> = ({
         </div>
 
         {nativeCaps.isNative && (
-          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2.5 pt-2">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2.5 pt-2">
             {[
               {label: 'تشخیص تماس ورودی', ok: nativeCaps.phoneState},
               {label: 'شماره تماس‌گیرنده', ok: nativeCaps.callLog},
               {label: 'خواندن پیامک (SMS)', ok: nativeCaps.sms},
+              {label: 'اعلان پیامک / RCS', ok: nativeCaps.notificationListener},
               {label: 'خواندن نام مخاطبین', ok: nativeCaps.contacts},
               {label: 'اعلان‌های اندروید', ok: nativeCaps.notifications},
-              {label: 'معافیت باتری MIUI', ok: nativeCaps.batteryIgnored},
+              {label: 'معافیت باتری MIUI/HyperOS', ok: nativeCaps.batteryIgnored},
               {label: 'باز شدن خودکار صبح', ok: nativeCaps.overlay},
               {label: 'سرویس دائمی پس‌زمینه', ok: nativeCaps.keepAliveRunning},
               {label: 'آلارم دقیق صبحگاهی', ok: nativeCaps.exactAlarm},
@@ -812,20 +834,20 @@ export const SyncSettingsView: React.FC<SyncSettingsViewProps> = ({
           </button>
         </form>
 
-        {/* Xiaomi Mi 10T Pro / MIUI 14 Background Checklist */}
+        {/* Xiaomi Mi 10T Pro (MIUI 14) & POCO X6 Pro (HyperOS) Background Checklist */}
         <div className="rounded-xl bg-amber-50/70 dark:bg-amber-950/25 border border-amber-200/80 dark:border-amber-900/50 p-4 sm:p-5 space-y-2.5">
           <div className="text-xs sm:text-sm font-bold text-amber-950 dark:text-amber-200">
-            تنظیمات لازم در شیائومی Mi 10T Pro (MIUI 14) برای بسته نشدن در پس‌زمینه
+            تنظیمات ضروری در شیائومی Mi 10T Pro (MIUI 14) و POCO X6 Pro (HyperOS / اندروید ۱۴ و ۱۵)
           </div>
           <ol className="list-decimal list-inside space-y-1.5 text-xs leading-6 text-amber-900 dark:text-amber-100/90">
             <li>
-              پس از نصب فایل <strong>APK</strong> روی گوشی، وارد تنظیمات برنامه شوید: بخش <strong>صرفه‌جویی باتری</strong> را روی <strong>«بدون محدودیت / No restrictions»</strong> قرار دهید و گزینه <strong>شروع خودکار (Autostart)</strong> را روشن کنید.
+              <strong>باز کردن تنظیمات محدودشده (برای POCO X6 Pro و اندروید ۱۴/۱۵):</strong> روی دکمه «باز کردن تنظیمات محدودشده برنامه» بزنید، سه‌نقطه بالای صفحه (⋮) را لمس کنید و گزینه <strong>Allow restricted settings (مجاز کردن تنظیمات محدودشده)</strong> را بزنید تا دسترسی پیامک و اعلان باز شود.
             </li>
             <li>
-              کلید <strong>«روشن کردن اجرا در پس‌زمینه»</strong> را فعال کنید تا سرویس دائمی اندروید (<code dir="ltr">ForegroundService</code> + آلارم دقیق <code dir="ltr">AlarmManager</code>) همزمان با گوش دادن به تماس‌های ورودی فعال بماند.
+              <strong>خواندن پیامک‌های Google Messages و RCS:</strong> روی دکمه <strong>«فعال‌سازی خواندن پیامک و RCS (اعلان‌ها)»</strong> بزنید و «روزهای من و زری» را روشن کنید تا حتی پیام‌های چت اینترنتی/RCS با صدای روان فارسی خوانده شوند.
             </li>
             <li>
-              برای ساخت فایل نصبی <strong>.apk</strong>: پروژه را به مخزن GitHub خود ارسال کنید تا گردش‌کار <code dir="ltr">Build Android APK</code> در تب <strong>Actions</strong> به‌طور خودکار فایل آماده نصب را بسازد.
+              <strong>صرفه‌جویی باتری و شروع خودکار:</strong> در تنظیمات برنامه، صرفه‌جویی باتری را روی <strong>«بدون محدودیت / No restrictions»</strong> بگذارید، <strong>شروع خودکار (Autostart)</strong> را روشن کنید و کلید «روشن کردن اجرا در پس‌زمینه» را فعال نمایید.
             </li>
           </ol>
         </div>

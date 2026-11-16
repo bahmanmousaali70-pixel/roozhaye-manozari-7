@@ -1,3 +1,4 @@
+import {Capacitor} from '@capacitor/core';
 import {initializeApp} from 'firebase/app';
 import {
   getAuth,
@@ -83,11 +84,19 @@ async function testConnection(): Promise<void> {
 testConnection();
 
 export async function signInWithGoogleSmart(): Promise<User | null> {
+  if (Capacitor.isNativePlatform()) {
+    throw new Error(
+      'گوگل اجازه ورود OAuth را داخل WebView اپلیکیشن نمی‌دهد. برای همگام‌سازی ابری، سایت roozhaye-manozari-7.ai.studio را در مرورگر کروم باز کنید یا از دکمه‌های پشتیبان JSON استفاده نمایید.'
+    );
+  }
   try {
     const result = await signInWithPopup(auth, googleProvider);
     return result.user;
   } catch (err) {
     const code = (err as {code?: string})?.code ?? '';
+    if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') {
+      return null;
+    }
     if (
       code === 'auth/popup-blocked' ||
       code === 'auth/operation-not-supported-in-this-environment'
@@ -106,10 +115,14 @@ export async function signInWithGoogleSmart(): Promise<User | null> {
 }
 
 export async function checkRedirectSignIn(): Promise<User | null> {
+  if (Capacitor.isNativePlatform()) {
+    return null;
+  }
   try {
     const res = await getRedirectResult(auth);
     return res?.user ?? null;
-  } catch {
+  } catch (err) {
+    console.warn('Redirect sign-in notice:', err);
     return null;
   }
 }

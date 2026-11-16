@@ -43,8 +43,9 @@ function sanitizeId(raw: string): string {
 
 export async function ensureUserAndDiscoverSpace(user: User): Promise<CoupleSpaceInfo> {
   const uid = sanitizeId(user.uid);
-  const email = (user.email ?? '').trim().toLowerCase();
-  const displayName = clampStr(user.displayName || email.split('@')[0], 100, 'همراه');
+  const email = (user.email ?? '').trim();
+  const lowerEmail = email.toLowerCase();
+  const displayName = clampStr(user.displayName || lowerEmail.split('@')[0], 100, 'همراه');
   const userPath = `users/${uid}`;
 
   // 1. Ensure user profile exists
@@ -74,7 +75,6 @@ export async function ensureUserAndDiscoverSpace(user: User): Promise<CoupleSpac
 
   // 2. Check if activeSpaceId is already valid
   if (activeSpaceId) {
-    const spacePath = `spaces/${activeSpaceId}`;
     try {
       const spaceSnap = await getDoc(doc(db, 'spaces', activeSpaceId));
       if (spaceSnap.exists()) {
@@ -119,7 +119,7 @@ export async function ensureUserAndDiscoverSpace(user: User): Promise<CoupleSpac
         };
       }
     } catch (err) {
-      handleFirestoreError(err, OperationType.LIST, 'spaces');
+      console.warn('Partner discovery skipped:', err);
     }
   }
 
@@ -219,7 +219,7 @@ export async function invitePartnerEmail(spaceId: string, partnerEmail: string):
 export async function joinSpaceByCode(spaceIdRaw: string, user: User): Promise<CoupleSpaceInfo> {
   const spaceId = sanitizeId(spaceIdRaw.trim());
   const uid = sanitizeId(user.uid);
-  const email = (user.email ?? '').trim().toLowerCase();
+  const email = (user.email ?? '').trim();
   const displayName = clampStr(user.displayName || email.split('@')[0], 100, 'زری');
   const path = `spaces/${spaceId}`;
 
@@ -263,6 +263,11 @@ export function subscribeToCoupleSpace(
 ): Unsubscribe {
   const unsubs: Unsubscribe[] = [];
 
+  const reportListenerError = (label: string, err: Error) => {
+    console.warn(`Firestore ${label} listener error:`, err);
+    callbacks.onError(err.message || label);
+  };
+
   unsubs.push(
     onSnapshot(
       doc(db, 'spaces', spaceId),
@@ -272,9 +277,7 @@ export function subscribeToCoupleSpace(
           callbacks.onSpaceMeta(typeof data.partnerEmail === 'string' ? data.partnerEmail : '');
         }
       },
-      (err) => {
-        callbacks.onError(err.message);
-      }
+      (err) => reportListenerError('spaceMeta', err)
     )
   );
 
@@ -286,25 +289,27 @@ export function subscribeToCoupleSpace(
         const items: GoalItem[] = snap.docs
           .map((d) => {
             const data = d.data();
+            if (!data || typeof data.title !== 'string') return null;
             return {
-              id: data.id,
+              id: typeof data.id === 'string' ? data.id : d.id,
               title: data.title,
-              owner: data.owner,
+              owner: data.owner === 'man' || data.owner === 'zari' || data.owner === 'both' ? data.owner : 'both',
               scope: data.scope === 'work' || data.scope === 'home' ? data.scope : undefined,
-              category: data.category,
-              timeBlock: data.timeBlock,
-              priority: data.priority,
+              category: data.category ?? 'purpose',
+              timeBlock: data.timeBlock ?? 'morning',
+              priority: data.priority === 'high' ? 'high' : 'normal',
               completed: Boolean(data.completed),
-              dateKey: data.dateKey,
+              dateKey: typeof data.dateKey === 'string' ? data.dateKey : '',
               reminderTime: typeof data.reminderTime === 'string' && data.reminderTime ? data.reminderTime : undefined,
               reminderVoice: typeof data.reminderVoice === 'string' ? data.reminderVoice : undefined,
               createdAt: Number(data.clientCreatedAt ?? Date.now()),
             } as GoalItem;
           })
+          .filter((item): item is GoalItem => item !== null)
           .sort((a, b) => b.createdAt - a.createdAt);
-        callbacks.onGoals(items);
+        if (items.length > 0) callbacks.onGoals(items);
       },
-      (err) => handleFirestoreError(err, OperationType.LIST, `spaces/${spaceId}/goals`)
+      (err) => reportListenerError('goals', err)
     )
   );
 
@@ -313,18 +318,21 @@ export function subscribeToCoupleSpace(
       collection(db, 'spaces', spaceId, 'habits'),
       (snap) => {
         if (snap.empty) return;
-        const items: HabitItem[] = snap.docs.map((d) => {
-          const data = d.data();
-          return {
-            id: data.id,
-            title: data.title,
-            owner: data.owner,
-            completedDates: Array.isArray(data.completedDates) ? data.completedDates : [],
-          } as HabitItem;
-        });
-        callbacks.onHabits(items);
+        const items: HabitItem[] = snap.docs
+          .map((d) => {
+            const data = d.data();
+            if (!data || typeof data.title !== 'string') return null;
+            return {
+              id: typeof data.id === 'string' ? data.id : d.id,
+              title: data.title,
+              owner: data.owner === 'man' || data.owner === 'zari' || data.owner === 'both' ? data.owner : 'both',
+              completedDates: Array.isArray(data.completedDates) ? data.completedDates : [],
+            } as HabitItem;
+          })
+          .filter((item): item is HabitItem => item !== null);
+        if (items.length > 0) callbacks.onHabits(items);
       },
-      (err) => handleFirestoreError(err, OperationType.LIST, `spaces/${spaceId}/habits`)
+      (err) => reportListenerError('habits', err)
     )
   );
 
@@ -336,22 +344,24 @@ export function subscribeToCoupleSpace(
         const items: GratitudeEntry[] = snap.docs
           .map((d) => {
             const data = d.data();
+            if (!data) return null;
             const arr = Array.isArray(data.items) ? data.items : ['', '', ''];
             return {
-              id: data.id,
-              dateKey: data.dateKey,
-              jalaliDate: data.jalaliDate,
-              author: data.author,
-              mood: data.mood,
+              id: typeof data.id === 'string' ? data.id : d.id,
+              dateKey: typeof data.dateKey === 'string' ? data.dateKey : '',
+              jalaliDate: typeof data.jalaliDate === 'string' ? data.jalaliDate : 'امروز',
+              author: data.author === 'man' || data.author === 'zari' || data.author === 'both' ? data.author : 'both',
+              mood: data.mood ?? 'grateful',
               items: [arr[0] ?? '', arr[1] ?? '', arr[2] ?? ''] as [string, string, string],
-              loveNote: data.loveNote ?? '',
+              loveNote: typeof data.loveNote === 'string' ? data.loveNote : '',
               createdAt: Number(data.clientCreatedAt ?? Date.now()),
             } as GratitudeEntry;
           })
+          .filter((item): item is GratitudeEntry => item !== null)
           .sort((a, b) => b.createdAt - a.createdAt);
-        callbacks.onGratitudes(items);
+        if (items.length > 0) callbacks.onGratitudes(items);
       },
-      (err) => handleFirestoreError(err, OperationType.LIST, `spaces/${spaceId}/gratitudes`)
+      (err) => reportListenerError('gratitudes', err)
     )
   );
 
@@ -360,24 +370,27 @@ export function subscribeToCoupleSpace(
       collection(db, 'spaces', spaceId, 'callers'),
       (snap) => {
         if (snap.empty) return;
-        const items: CallerContact[] = snap.docs.map((d) => {
-          const data = d.data();
-          return {
-            id: data.id,
-            name: data.name,
-            latinAlias: data.latinAlias,
-            persianPhonetic: data.persianPhonetic,
-            relation: data.relation,
-            template: data.template,
-            repeatCount: data.repeatCount === 2 ? 2 : 1,
-            chimeStyle: data.chimeStyle,
-            voiceName: data.voiceName,
-            favorite: Boolean(data.favorite),
-          } as CallerContact;
-        });
-        callbacks.onCallers(items);
+        const items: CallerContact[] = snap.docs
+          .map((d) => {
+            const data = d.data();
+            if (!data || typeof data.name !== 'string') return null;
+            return {
+              id: typeof data.id === 'string' ? data.id : d.id,
+              name: data.name,
+              latinAlias: typeof data.latinAlias === 'string' ? data.latinAlias : undefined,
+              persianPhonetic: typeof data.persianPhonetic === 'string' ? data.persianPhonetic : undefined,
+              relation: typeof data.relation === 'string' ? data.relation : '',
+              template: typeof data.template === 'string' ? data.template : 'تماس ورودی از طرف {name}',
+              repeatCount: data.repeatCount === 2 ? 2 : 1,
+              chimeStyle: data.chimeStyle ?? 'gentle',
+              voiceName: data.voiceName ?? 'Kore',
+              favorite: Boolean(data.favorite),
+            } as CallerContact;
+          })
+          .filter((item): item is CallerContact => item !== null);
+        if (items.length > 0) callbacks.onCallers(items);
       },
-      (err) => handleFirestoreError(err, OperationType.LIST, `spaces/${spaceId}/callers`)
+      (err) => reportListenerError('callers', err)
     )
   );
 
@@ -386,23 +399,26 @@ export function subscribeToCoupleSpace(
       collection(db, 'spaces', spaceId, 'schedules'),
       (snap) => {
         if (snap.empty) return;
-        const items: ScheduledAnnouncement[] = snap.docs.map((d) => {
-          const data = d.data();
-          return {
-            id: data.id,
-            title: data.title,
-            topic: data.topic,
-            time: data.time,
-            enabled: Boolean(data.enabled),
-            voiceName: data.voiceName,
-            customText: data.customText,
-            days: data.days,
-            lastTriggeredDate: data.lastTriggeredDate,
-          } as ScheduledAnnouncement;
-        });
-        callbacks.onSchedules(items);
+        const items: ScheduledAnnouncement[] = snap.docs
+          .map((d) => {
+            const data = d.data();
+            if (!data || typeof data.title !== 'string') return null;
+            return {
+              id: typeof data.id === 'string' ? data.id : d.id,
+              title: data.title,
+              topic: data.topic ?? 'morning',
+              time: typeof data.time === 'string' ? data.time : '08:00',
+              enabled: Boolean(data.enabled),
+              voiceName: data.voiceName ?? 'Kore',
+              customText: typeof data.customText === 'string' ? data.customText : undefined,
+              days: data.days ?? 'daily',
+              lastTriggeredDate: typeof data.lastTriggeredDate === 'string' ? data.lastTriggeredDate : undefined,
+            } as ScheduledAnnouncement;
+          })
+          .filter((item): item is ScheduledAnnouncement => item !== null);
+        if (items.length > 0) callbacks.onSchedules(items);
       },
-      (err) => handleFirestoreError(err, OperationType.LIST, `spaces/${spaceId}/schedules`)
+      (err) => reportListenerError('schedules', err)
     )
   );
 
@@ -412,12 +428,13 @@ export function subscribeToCoupleSpace(
       (snap) => {
         if (!snap.exists()) return;
         const data = snap.data();
+        const rawMyName = typeof data.myName === 'string' && data.myName.trim() ? data.myName.trim() : 'بهمن';
         callbacks.onSettings({
           theme: data.theme === 'dark' ? 'dark' : 'light',
-          defaultVoice: data.defaultVoice,
+          defaultVoice: data.defaultVoice ?? 'Kore',
           speechRate: Number(data.speechRate ?? 1),
-          myName: data.myName ?? 'مهدی',
-          partnerName: data.partnerName ?? 'زری',
+          myName: rawMyName === 'مهدی' ? 'بهمن' : rawMyName,
+          partnerName: typeof data.partnerName === 'string' && data.partnerName.trim() ? data.partnerName : 'زری',
           backgroundKeepAlive: Boolean(data.backgroundKeepAlive),
           announceCalls: data.announceCalls !== undefined ? Boolean(data.announceCalls) : true,
           announceSms: data.announceSms !== undefined ? Boolean(data.announceSms) : true,
@@ -426,7 +443,7 @@ export function subscribeToCoupleSpace(
           nightMovieTime: typeof data.nightMovieTime === 'string' && /^\d{2}:\d{2}$/.test(data.nightMovieTime) ? data.nightMovieTime : '22:00',
         });
       },
-      (err) => handleFirestoreError(err, OperationType.GET, `spaces/${spaceId}/config/settings`)
+      (err) => reportListenerError('settings', err)
     )
   );
 
@@ -684,7 +701,7 @@ export async function pushSettingsToCloud(spaceId: string, settings: AppSettings
     theme: settings.theme === 'dark' ? 'dark' : 'light',
     defaultVoice: settings.defaultVoice,
     speechRate: Math.max(0.5, Math.min(2, Number(settings.speechRate || 1))),
-    myName: clampStr(settings.myName, 60, 'مهدی'),
+    myName: clampStr(settings.myName, 60, 'بهمن'),
     partnerName: clampStr(settings.partnerName, 60, 'زری'),
     backgroundKeepAlive: Boolean(settings.backgroundKeepAlive),
     announceCalls: Boolean(settings.announceCalls ?? true),

@@ -82,46 +82,46 @@ define(['./workbox-afac4cd2'], (function (workbox) { 'use strict';
     "revision": "cc7e116baa56bab425cca3aeaedf08bd"
   }, {
     "url": "pwa-maskable-512x512.png",
-    "revision": "0d8e484a0ad07b413ff44e1f8dd659a6"
+    "revision": "8b8c8286c81073e3ce8873b864866617"
   }, {
     "url": "pwa-512x512.png",
-    "revision": "670ab2973e8f2af3f43732c6b5d3d241"
+    "revision": "9e783a74fa7d2f5cb07cd84c8eeb87f2"
   }, {
     "url": "pwa-192x192.png",
-    "revision": "cebb107e85e574e9264e470d4127eaba"
+    "revision": "029fc6bdf27b21e88130cf60caf5f873"
   }, {
     "url": "index.html",
-    "revision": "38d5881ed16cd192c0ed44a8b86e5dc3"
+    "revision": "b4d28f2c4d01886fbe9e5ab20ef25137"
   }, {
     "url": "icon.svg",
     "revision": "3b8dd97173b1591aa5f8de15f5daad7a"
   }, {
     "url": "apple-touch-icon.png",
-    "revision": "725fe72bd52faaecff31bb71a0e6adf0"
+    "revision": "abda1a82fd992888e37947ae70cb70e9"
   }, {
     "url": "assets/workbox-window.prod.es5-Bd17z0YL.js",
     "revision": null
   }, {
-    "url": "assets/index-DqCxL5RI.js",
+    "url": "assets/index-xF8Kn0kT.css",
     "revision": null
   }, {
-    "url": "assets/index-B-XsLlhD.css",
+    "url": "assets/index-pvOWhXIZ.js",
     "revision": null
   }, {
     "url": "apple-touch-icon.png",
-    "revision": "725fe72bd52faaecff31bb71a0e6adf0"
+    "revision": "abda1a82fd992888e37947ae70cb70e9"
   }, {
     "url": "icon.svg",
     "revision": "3b8dd97173b1591aa5f8de15f5daad7a"
   }, {
     "url": "pwa-192x192.png",
-    "revision": "cebb107e85e574e9264e470d4127eaba"
+    "revision": "029fc6bdf27b21e88130cf60caf5f873"
   }, {
     "url": "pwa-512x512.png",
-    "revision": "670ab2973e8f2af3f43732c6b5d3d241"
+    "revision": "9e783a74fa7d2f5cb07cd84c8eeb87f2"
   }, {
     "url": "pwa-maskable-512x512.png",
-    "revision": "0d8e484a0ad07b413ff44e1f8dd659a6"
+    "revision": "8b8c8286c81073e3ce8873b864866617"
   }, {
     "url": "sw-notifications.js",
     "revision": "cc7e116baa56bab425cca3aeaedf08bd"
@@ -130,7 +130,9 @@ define(['./workbox-afac4cd2'], (function (workbox) { 'use strict';
     "revision": "b0f46a1fd50dea09fa9653bedf848041"
   }], {});
   workbox.cleanupOutdatedCaches();
-  workbox.registerRoute(new workbox.NavigationRoute(workbox.createHandlerBoundToURL("/index.html")));
+  workbox.registerRoute(new workbox.NavigationRoute(workbox.createHandlerBoundToURL("/index.html"), {
+    denylist: [/^\/__\/auth/, /^\/api\//]
+  }));
   workbox.registerRoute(/^https:\/\/fonts\.googleapis\.com\/.*/i, new workbox.CacheFirst({
     "cacheName": "google-fonts-cache",
     plugins: [new workbox.ExpirationPlugin({

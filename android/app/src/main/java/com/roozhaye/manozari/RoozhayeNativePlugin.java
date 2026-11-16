@@ -14,6 +14,7 @@ import android.provider.Settings;
 import android.util.Base64;
 
 import androidx.core.app.ActivityCompat;
+import androidx.core.app.NotificationManagerCompat;
 import androidx.core.content.ContextCompat;
 
 import com.getcapacitor.JSObject;
@@ -86,6 +87,45 @@ public class RoozhayeNativePlugin extends Plugin {
         }
 
         call.resolve(buildCapsObject());
+    }
+
+    @PluginMethod
+    public void openNotificationListenerSettings(PluginCall call) {
+        Context ctx = getContext();
+        boolean launched = false;
+        try {
+            Intent intent = new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS);
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            ctx.startActivity(intent);
+            launched = true;
+        } catch (Exception ignored) {
+            launched = openAppDetailsInternal(ctx);
+        }
+        JSObject ret = new JSObject();
+        ret.put("ok", launched);
+        call.resolve(ret);
+    }
+
+    @PluginMethod
+    public void openAppInfoSettings(PluginCall call) {
+        boolean launched = openAppDetailsInternal(getContext());
+        JSObject ret = new JSObject();
+        ret.put("ok", launched);
+        call.resolve(ret);
+    }
+
+    private boolean openAppDetailsInternal(Context ctx) {
+        try {
+            Intent detailsIntent = new Intent(
+                    Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                    Uri.parse("package:" + ctx.getPackageName())
+            );
+            detailsIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            ctx.startActivity(detailsIntent);
+            return true;
+        } catch (Exception ignored) {
+            return false;
+        }
     }
 
     @PluginMethod
@@ -232,6 +272,13 @@ public class RoozhayeNativePlugin extends Plugin {
         obj.put("contacts", ContextCompat.checkSelfPermission(ctx, Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED);
         obj.put("sms", ContextCompat.checkSelfPermission(ctx, Manifest.permission.RECEIVE_SMS) == PackageManager.PERMISSION_GRANTED
                 && ContextCompat.checkSelfPermission(ctx, Manifest.permission.READ_SMS) == PackageManager.PERMISSION_GRANTED);
+
+        boolean listenerOk = false;
+        try {
+            listenerOk = NotificationManagerCompat.getEnabledListenerPackages(ctx).contains(ctx.getPackageName());
+        } catch (Exception ignored) {
+        }
+        obj.put("notificationListener", listenerOk);
 
         boolean notifOk = true;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {

@@ -120,11 +120,25 @@ export interface GroundingLink {
   url: string;
 }
 
+export interface MusicTrack {
+  id: string;
+  title: string;
+  artist: string;
+  album?: string;
+  artworkUrl?: string;
+  streamUrl: string;
+  durationSec?: number;
+  isLiveStream?: boolean;
+  source: 'audius' | 'itunes' | 'deezer' | 'radio';
+  externalUrl?: string;
+}
+
 export interface NightDiscoveryResponse {
   mode: 'music' | 'movies';
   title: string;
   markdownText: string;
   spokenSummary: string;
   links: GroundingLink[];
+  tracks?: MusicTrack[];
   fetchedAt: number;
 }

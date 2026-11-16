@@ -153,29 +153,54 @@ export async function buildCallerRingtoneWav(
 
   let speechPcm = new Int16Array(0);
   if (spokenWavBuffer && spokenWavBuffer.byteLength > 44) {
-    // Gemini unary TTS returns 24kHz mono 16-bit WAV with 44-byte RIFF header (or variable header)
     const view = new DataView(spokenWavBuffer);
-    let dataOffset = 44;
-    let dataLength = spokenWavBuffer.byteLength - 44;
-    // Scan chunks safely for "data"
-    let offset = 12;
-    while (offset + 8 <= spokenWavBuffer.byteLength) {
-      const chunkId = String.fromCharCode(
-        view.getUint8(offset),
-        view.getUint8(offset + 1),
-        view.getUint8(offset + 2),
-        view.getUint8(offset + 3)
-      );
-      const chunkSize = view.getUint32(offset + 4, true);
-      if (chunkId === 'data') {
-        dataOffset = offset + 8;
-        dataLength = Math.min(chunkSize, spokenWavBuffer.byteLength - dataOffset);
-        break;
+    const isRiff =
+      view.getUint8(0) === 0x52 &&
+      view.getUint8(1) === 0x49 &&
+      view.getUint8(2) === 0x46 &&
+      view.getUint8(3) === 0x46;
+
+    if (isRiff) {
+      let dataOffset = 44;
+      let dataLength = spokenWavBuffer.byteLength - 44;
+      let offset = 12;
+      while (offset + 8 <= spokenWavBuffer.byteLength) {
+        const chunkId = String.fromCharCode(
+          view.getUint8(offset),
+          view.getUint8(offset + 1),
+          view.getUint8(offset + 2),
+          view.getUint8(offset + 3)
+        );
+        const chunkSize = view.getUint32(offset + 4, true);
+        if (chunkId === 'data') {
+          dataOffset = offset + 8;
+          dataLength = Math.min(chunkSize, spokenWavBuffer.byteLength - dataOffset);
+          break;
+        }
+        offset += 8 + chunkSize + (chunkSize % 2);
       }
-      offset += 8 + chunkSize + (chunkSize % 2);
+      const sampleCount = Math.floor(dataLength / 2);
+      speechPcm = new Int16Array(spokenWavBuffer, dataOffset, sampleCount);
+    } else if (typeof window !== 'undefined') {
+      try {
+        const AudioCtx =
+          window.AudioContext ||
+          (window as unknown as {webkitAudioContext: typeof AudioContext}).webkitAudioContext;
+        const ctx = new AudioCtx({sampleRate});
+        const decoded = await ctx.decodeAudioData(spokenWavBuffer.slice(0));
+        await ctx.close().catch(() => {});
+        const ch0 = decoded.getChannelData(0);
+        const ratio = decoded.sampleRate / sampleRate;
+        const targetLen = Math.floor(ch0.length / ratio);
+        speechPcm = new Int16Array(targetLen);
+        for (let i = 0; i < targetLen; i++) {
+          const srcIdx = Math.min(ch0.length - 1, Math.floor(i * ratio));
+          speechPcm[i] = Math.max(-32767, Math.min(32767, Math.round(ch0[srcIdx] * 32767)));
+        }
+      } catch {
+        // fallback to chime only if decoding fails
+      }
     }
-    const sampleCount = Math.floor(dataLength / 2);
-    speechPcm = new Int16Array(spokenWavBuffer, dataOffset, sampleCount);
   }
 
   const parts: Int16Array[] = [chimePcm, new Int16Array(pauseSamples)];

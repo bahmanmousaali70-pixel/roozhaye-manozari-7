@@ -174,7 +174,14 @@ async function playWavBuffer(buffer: ArrayBuffer, rate: number, token: number): 
 
   if (token !== playbackToken) return;
   await new Promise<void>((resolve, reject) => {
-    const blob = new Blob([buffer], {type: 'audio/wav'});
+    const bytes = new Uint8Array(buffer);
+    const isWav =
+      bytes.length >= 4 &&
+      bytes[0] === 0x52 &&
+      bytes[1] === 0x49 &&
+      bytes[2] === 0x46 &&
+      bytes[3] === 0x46;
+    const blob = new Blob([buffer], {type: isWav ? 'audio/wav' : 'audio/mpeg'});
     const url = URL.createObjectURL(blob);
     activeUrl = url;
     const audio = new Audio(url);
@@ -420,12 +427,11 @@ export async function speakFluentPersian(options: SpeakOptions): Promise<'cache'
       }
     }
 
-    // 2. If online, try Gemini TTS first (with one transient quota retry)
-    let sawQuotaLimit = false;
+    // 2. If online, fetch server TTS (Gemini primary + automatic neural Persian fallback)
     if (navigator.onLine) {
       options.onLoading?.();
       try {
-        let result = await generateAndCacheGeminiWav({
+        const result = await generateAndCacheGeminiWav({
           text: options.text,
           title: options.title,
           category: options.category,
@@ -434,26 +440,12 @@ export async function speakFluentPersian(options: SpeakOptions): Promise<'cache'
           clipId,
         });
         if (token !== playbackToken) return 'gemini';
-        if (!('buffer' in result) && result.reason === 'quota') {
-          await new Promise((r) => setTimeout(r, 1500));
-          if (token !== playbackToken) return 'gemini';
-          result = await generateAndCacheGeminiWav({
-            text: options.text,
-            title: options.title,
-            category: options.category,
-            voiceName,
-            style: options.style,
-            clipId,
-          });
-          if (token !== playbackToken) return 'gemini';
-        }
         if ('buffer' in result) {
           options.onStart?.('gemini');
           await playWavBuffer(result.buffer, rate, token);
           options.onEnd?.();
           return 'gemini';
         }
-        sawQuotaLimit = result.reason === 'quota';
       } catch (err) {
         console.warn('Online TTS fallback to built-in bilingual speech:', err);
       }
@@ -473,9 +465,7 @@ export async function speakFluentPersian(options: SpeakOptions): Promise<'cache'
     options.onEnd?.();
     if (!ok) {
       options.onError?.(
-        sawQuotaLimit
-          ? 'ظرفیت موقت صدای آنلاین الان شلوغ است و موتور آفلاین فارسی روی گوشی نصب نیست. چند ثانیه بعد دوباره امتحان کنید یا فایل‌ها را از بخش صوت دانلود کنید.'
-          : 'صدای آفلاین فارسی روی این گوشی نصب نیست. برای پخش آفلاین، موتور فارسی (مثل eSpeak NG) نصب کنید یا با اینترنت و فیلترشکن وصل شوید.'
+        'برای پخش صوت، اتصال اینترنت (و در صورت نیاز فیلترشکن برای برنامه) را بررسی کنید تا فایل در حافظه آفلاین ذخیره شود.'
       );
     }
     return 'offline-speech';

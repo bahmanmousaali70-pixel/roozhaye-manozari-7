@@ -108,7 +108,7 @@ export const VoiceLibraryView: React.FC<VoiceLibraryViewProps> = ({
     for (let i = 0; i < listToBuild.length; i++) {
       const item = listToBuild[i];
       try {
-        let res = await generateAndCacheGeminiWav({
+        const res = await generateAndCacheGeminiWav({
           clipId: `${item.id}__${selectedVoice}`,
           text: item.text,
           title: `${item.title} (${VOICE_PERSONAS.find((v) => v.id === selectedVoice)?.label.split(' ')[0] ?? ''})`,
@@ -116,17 +116,6 @@ export const VoiceLibraryView: React.FC<VoiceLibraryViewProps> = ({
           voiceName: selectedVoice,
           style: item.style,
         });
-        if (!('buffer' in res) && res.reason === 'quota') {
-          await new Promise((r) => setTimeout(r, 3500));
-          res = await generateAndCacheGeminiWav({
-            clipId: `${item.id}__${selectedVoice}`,
-            text: item.text,
-            title: `${item.title} (${VOICE_PERSONAS.find((v) => v.id === selectedVoice)?.label.split(' ')[0] ?? ''})`,
-            category: item.pack,
-            voiceName: selectedVoice,
-            style: item.style,
-          });
-        }
         if ('buffer' in res) {
           successCount++;
         } else {
@@ -139,14 +128,14 @@ export const VoiceLibraryView: React.FC<VoiceLibraryViewProps> = ({
       }
       setPackProgress({current: i + 1, total: listToBuild.length});
       if (i < listToBuild.length - 1) {
-        await new Promise((r) => setTimeout(r, 2800));
+        await new Promise((r) => setTimeout(r, 350));
       }
     }
 
     await onRefreshClips();
     setPackProgress(null);
     if (quotaHit && successCount === 0) {
-      onStatusToast('ظرفیت آنلاین ساخت فایل جدید امروز تکمیل شده، اما پخش مستقیم با صدای دستگاه همیشه فعال است.');
+      onStatusToast('در حال حاضر سرور صدا پاسخ نداد؛ اتصال اینترنت و فیلترشکن را بررسی کنید.');
     } else if (successCount === 0 && lastError) {
       onStatusToast(`۰ فایل ذخیره شد — علت: ${lastError}`);
     } else {
@@ -257,11 +246,13 @@ export const VoiceLibraryView: React.FC<VoiceLibraryViewProps> = ({
   const handleDownloadWav = async (clip: AudioLibraryEntry) => {
     const buf = await getAudioClipBuffer(clip.id);
     if (!buf) return;
-    const blob = new Blob([buf], {type: 'audio/wav'});
+    const head = new Uint8Array(buf.slice(0, 4));
+    const isWav = head[0] === 0x52 && head[1] === 0x49 && head[2] === 0x46 && head[3] === 0x46;
+    const blob = new Blob([buf], {type: isWav ? 'audio/wav' : 'audio/mpeg'});
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${clip.title.replace(/[^\u0600-\u06FF\w-]+/g, '_')}.wav`;
+    a.download = `${clip.title.replace(/[^\u0600-\u06FF\w-]+/g, '_')}.${isWav ? 'wav' : 'mp3'}`;
     document.body.appendChild(a);
     a.click();
     a.remove();

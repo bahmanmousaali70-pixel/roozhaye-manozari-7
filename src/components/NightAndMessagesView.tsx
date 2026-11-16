@@ -1,9 +1,10 @@
-import React, {useEffect, useRef, useState} from 'react';
+import React, {useEffect, useMemo, useRef, useState} from 'react';
 import {
   BellRing,
   Check,
   Clock,
   Copy,
+  Disc3,
   ExternalLink,
   Film,
   Loader2,
@@ -12,16 +13,19 @@ import {
   Music2,
   Pause,
   Play,
+  Radio,
   Search,
+  SkipBack,
+  SkipForward,
   Sparkles,
   Square,
   Volume2,
-  Waves,
 } from 'lucide-react';
 import {toPersianDigits, VOICE_PERSONAS} from '../data/persianLibrary';
 import {apiUrl} from '../services/apiConfig';
 import type {
   AppSettings,
+  MusicTrack,
   NightDiscoveryResponse,
   SpecialMessageResult,
   VoiceName,
@@ -107,13 +111,27 @@ const OCCASIONS: {id: OccasionId; label: string; offlineTemplate: (recipient: st
 
 const TONES = ['صمیمی و گرم', 'عاشقانه و احساسی', 'محترمانه و ادبی', 'شاد و پرانرژی'];
 
-type SoundscapeKind = 'rain' | 'ocean' | 'calm432';
-
-const SOUNDSCAPES: {id: SoundscapeKind; label: string; desc: string}[] = [
-  {id: 'rain', label: 'باران شبانه', desc: 'صدای نرم و پیوسته باران (کاملاً آفلاین)'},
-  {id: 'ocean', label: 'امواج آرام دریا', desc: 'موج‌های ریتمیک ملایم برای رهایی ذهن'},
-  {id: 'calm432', label: 'فرکانس آرامش ۴۳۲ هرتز', desc: 'تون ممتد مدیتیشن و خواب عمیق'},
+const MUSIC_MOOD_PRESETS = [
+  'سنتی آرام و شجریان',
+  'پیانو و باران ملایم',
+  'پاپ آرام ایرانی',
+  'بی‌کلام رمانتیک',
+  'رادیو موسیقی لایت',
 ];
+
+function formatTrackClock(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return '۰۰:۰۰';
+  const total = Math.floor(seconds);
+  const mins = Math.floor(total / 60);
+  const secs = total % 60;
+  return `${toPersianDigits(String(mins).padStart(2, '0'))}:${toPersianDigits(String(secs).padStart(2, '0'))}`;
+}
+
+function sourceLabel(track: MusicTrack): string {
+  if (track.isLiveStream || track.source === 'radio') return 'رادیو زنده';
+  if (track.source === 'audius') return 'پخش کامل';
+  return 'پیش‌نمایش ۳۰ ثانیه‌ای';
+}
 
 export const NightAndMessagesView: React.FC<NightAndMessagesViewProps> = ({
   settings,
@@ -134,129 +152,192 @@ export const NightAndMessagesView: React.FC<NightAndMessagesViewProps> = ({
   const [tone, setTone] = useState(TONES[0]);
   const [details, setDetails] = useState('');
   const [msgResult, setMsgResult] = useState<SpecialMessageResult | null>(() =>
-    OCCASIONS[0].offlineTemplate(settings.partnerName || 'زری جان', settings.myName || 'مهدی')
+    OCCASIONS[0].offlineTemplate(settings.partnerName || 'زری جان', settings.myName || 'بهمن')
   );
   const [msgBusy, setMsgBusy] = useState(false);
   const [copiedMsg, setCopiedMsg] = useState(false);
   const [msgVoice, setMsgVoice] = useState<VoiceName>(settings.defaultVoice);
 
-  // Offline Ambient Synthesizer state
-  const [activeSound, setActiveSound] = useState<SoundscapeKind | null>(null);
+  // Night Online Music Playlist & Audio Player state
+  const [musicMood, setMusicMood] = useState('سنتی آرام و شجریان');
+  const [musicBusy, setMusicBusy] = useState(false);
+  const [currentTrackIndex, setCurrentTrackIndex] = useState<number>(-1);
+  const [isTrackPlaying, setIsTrackPlaying] = useState(false);
+  const [isTrackLoading, setIsTrackLoading] = useState(false);
+  const [trackTimeSec, setTrackTimeSec] = useState(0);
+  const [trackDurationSec, setTrackDurationSec] = useState(0);
   const [sleepMinutes, setSleepMinutes] = useState<number>(30);
   const [sleepRemainingSec, setSleepRemainingSec] = useState<number | null>(null);
-  const audioCtxRef = useRef<AudioContext | null>(null);
-  const masterGainRef = useRef<GainNode | null>(null);
+  const [failedArtIds, setFailedArtIds] = useState<Record<string, boolean>>({});
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const usedProxyForTrackRef = useRef<boolean>(false);
 
-  // Night Online Search state
-  const [musicMood, setMusicMood] = useState('پیانو و باران ملایم، سنتی آرام و لالایی شبانه');
-  const [musicBusy, setMusicBusy] = useState(false);
-
+  // Movies Discovery state
   const [movieMediaType, setMovieMediaType] = useState<'both' | 'movie' | 'series'>('both');
   const [movieGenre, setMovieGenre] = useState('درام، معمایی یا خانوادگی خوش‌ساخت با امتیاز بالای ۷.۵');
   const [movieBusy, setMovieBusy] = useState(false);
 
-  const stopAmbientSound = () => {
-    try {
-      if (masterGainRef.current && audioCtxRef.current) {
-        const now = audioCtxRef.current.currentTime;
-        masterGainRef.current.gain.linearRampToValueAtTime(0.0001, now + 0.3);
-      }
-      window.setTimeout(() => {
-        audioCtxRef.current?.close().catch(() => {});
-        audioCtxRef.current = null;
-        masterGainRef.current = null;
-      }, 350);
-    } catch {
-      audioCtxRef.current = null;
+  const tracks: MusicTrack[] = useMemo(() => {
+    return Array.isArray(nightMusicResult?.tracks) ? nightMusicResult.tracks : [];
+  }, [nightMusicResult]);
+
+  const activeTrack =
+    currentTrackIndex >= 0 && currentTrackIndex < tracks.length ? tracks[currentTrackIndex] : null;
+
+  const stopMusicPlayback = () => {
+    const el = audioRef.current;
+    if (el) {
+      el.pause();
+      el.removeAttribute('src');
+      el.load();
     }
-    setActiveSound(null);
+    setIsTrackPlaying(false);
+    setIsTrackLoading(false);
+    setTrackTimeSec(0);
+    setTrackDurationSec(0);
     setSleepRemainingSec(null);
   };
 
   useEffect(() => {
     return () => {
-      audioCtxRef.current?.close().catch(() => {});
+      const el = audioRef.current;
+      if (el) {
+        el.pause();
+        el.removeAttribute('src');
+      }
     };
   }, []);
 
   useEffect(() => {
     if (sleepRemainingSec === null) return;
     if (sleepRemainingSec <= 0) {
-      stopAmbientSound();
+      stopMusicPlayback();
+      onStatusToast('تایمر خواب تمام شد و پخش موسیقی متوقف گردید.');
       return;
     }
     const t = window.setTimeout(() => {
       setSleepRemainingSec((s) => (s !== null ? s - 1 : null));
     }, 1000);
     return () => window.clearTimeout(t);
-  }, [sleepRemainingSec]);
+  }, [sleepRemainingSec, onStatusToast]);
 
-  const startAmbientSound = (kind: SoundscapeKind) => {
-    if (activeSound === kind) {
-      stopAmbientSound();
+  const startTrackAtIndex = (index: number, list: MusicTrack[] = tracks) => {
+    if (index < 0 || index >= list.length) return;
+    const track = list[index];
+    const el = audioRef.current;
+    if (!el) return;
+
+    usedProxyForTrackRef.current = false;
+    setCurrentTrackIndex(index);
+    setTrackTimeSec(0);
+    setTrackDurationSec(track.durationSec ?? 0);
+    setIsTrackLoading(true);
+    setIsTrackPlaying(false);
+    if (sleepMinutes > 0 && sleepRemainingSec === null) {
+      setSleepRemainingSec(sleepMinutes * 60);
+    }
+
+    el.src = track.streamUrl;
+    el.load();
+    el.play()
+      .then(() => {
+        setIsTrackPlaying(true);
+        setIsTrackLoading(false);
+      })
+      .catch(() => {
+        // Retry automatically through same-origin server audio proxy
+        if (!usedProxyForTrackRef.current) {
+          usedProxyForTrackRef.current = true;
+          el.src = apiUrl(`/api/audio-proxy?url=${encodeURIComponent(track.streamUrl)}`);
+          el.load();
+          el.play()
+            .then(() => {
+              setIsTrackPlaying(true);
+              setIsTrackLoading(false);
+            })
+            .catch(() => {
+              setIsTrackLoading(false);
+              setIsTrackPlaying(false);
+              onStatusToast(`پخش قطعه «${track.title}» از مبدا مسدود بود؛ قطعه بعدی را امتحان کنید.`);
+            });
+        } else {
+          setIsTrackLoading(false);
+          setIsTrackPlaying(false);
+        }
+      });
+  };
+
+  const togglePlayTrack = (index: number) => {
+    const el = audioRef.current;
+    if (!el) return;
+    if (currentTrackIndex === index) {
+      if (isTrackPlaying) {
+        el.pause();
+        setIsTrackPlaying(false);
+      } else {
+        el.play()
+          .then(() => setIsTrackPlaying(true))
+          .catch(() => startTrackAtIndex(index));
+      }
       return;
     }
-    audioCtxRef.current?.close().catch(() => {});
-    const AudioCtx = window.AudioContext || (window as unknown as {webkitAudioContext: typeof AudioContext}).webkitAudioContext;
-    const ctx = new AudioCtx();
-    const master = ctx.createGain();
-    master.gain.setValueAtTime(0.001, ctx.currentTime);
-    master.gain.linearRampToValueAtTime(0.24, ctx.currentTime + 1.2);
-    master.connect(ctx.destination);
+    startTrackAtIndex(index);
+  };
 
-    if (kind === 'rain' || kind === 'ocean') {
-      // Synthesize smooth brown/pink noise buffer
-      const bufferSize = ctx.sampleRate * 4;
-      const noiseBuffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
-      const output = noiseBuffer.getChannelData(0);
-      let lastOut = 0;
-      for (let i = 0; i < bufferSize; i++) {
-        const white = Math.random() * 2 - 1;
-        output[i] = (lastOut + 0.02 * white) / 1.02;
-        lastOut = output[i];
-        output[i] *= kind === 'rain' ? 2.4 : 3.2;
-      }
+  const handlePrevTrack = () => {
+    if (tracks.length === 0) return;
+    const nextIdx = currentTrackIndex <= 0 ? tracks.length - 1 : currentTrackIndex - 1;
+    startTrackAtIndex(nextIdx);
+  };
 
-      const source = ctx.createBufferSource();
-      source.buffer = noiseBuffer;
-      source.loop = true;
+  const handleNextTrack = () => {
+    if (tracks.length === 0) return;
+    const nextIdx = currentTrackIndex + 1 >= tracks.length ? 0 : currentTrackIndex + 1;
+    startTrackAtIndex(nextIdx);
+  };
 
-      const filter = ctx.createBiquadFilter();
-      filter.type = 'lowpass';
-      filter.frequency.value = kind === 'rain' ? 1100 : 420;
+  const handleAudioError = () => {
+    const track = activeTrack;
+    const el = audioRef.current;
+    if (!track || !el) return;
 
-      if (kind === 'ocean') {
-        const lfo = ctx.createOscillator();
-        const lfoGain = ctx.createGain();
-        lfo.frequency.value = 0.11; // Slow ocean wave swell ~9s period
-        lfoGain.gain.value = 280;
-        lfo.connect(lfoGain);
-        lfoGain.connect(filter.frequency);
-        lfo.start();
-      }
-
-      source.connect(filter);
-      filter.connect(master);
-      source.start();
-    } else {
-      // 432Hz + 216Hz + 648Hz soothing harmonic pad
-      const freqs = [216, 432, 648];
-      freqs.forEach((f, idx) => {
-        const osc = ctx.createOscillator();
-        const g = ctx.createGain();
-        osc.type = 'sine';
-        osc.frequency.value = f;
-        g.gain.value = idx === 1 ? 0.18 : 0.07;
-        osc.connect(g);
-        g.connect(master);
-        osc.start();
-      });
+    if (!usedProxyForTrackRef.current) {
+      usedProxyForTrackRef.current = true;
+      el.src = apiUrl(`/api/audio-proxy?url=${encodeURIComponent(track.streamUrl)}`);
+      el.load();
+      el.play()
+        .then(() => {
+          setIsTrackPlaying(true);
+          setIsTrackLoading(false);
+        })
+        .catch(() => {
+          setIsTrackPlaying(false);
+          setIsTrackLoading(false);
+          if (tracks.length > 1) {
+            const nextIdx = (currentTrackIndex + 1) % tracks.length;
+            startTrackAtIndex(nextIdx);
+          } else {
+            onStatusToast(`پخش «${track.title}» ممکن نشد؛ با فیلترشکن یا قطعه دیگر امتحان کنید.`);
+          }
+        });
+      return;
     }
 
-    audioCtxRef.current = ctx;
-    masterGainRef.current = master;
-    setActiveSound(kind);
-    setSleepRemainingSec(sleepMinutes > 0 ? sleepMinutes * 60 : null);
+    setIsTrackPlaying(false);
+    setIsTrackLoading(false);
+    if (tracks.length > 1 && currentTrackIndex >= 0) {
+      onStatusToast(`قطعه «${track.title}» در دسترس نبود؛ رفتن به قطعه بعدی...`);
+      startTrackAtIndex((currentTrackIndex + 1) % tracks.length);
+    }
+  };
+
+  const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = Number(e.target.value);
+    const el = audioRef.current;
+    if (el && Number.isFinite(val)) {
+      el.currentTime = val;
+      setTrackTimeSec(val);
+    }
   };
 
   const handleGenerateSpecialMessage = async () => {
@@ -265,7 +346,7 @@ export const NightAndMessagesView: React.FC<NightAndMessagesViewProps> = ({
         ? customOccasionText.trim() || 'پیام محبت‌آمیز و خاص'
         : OCCASIONS.find((o) => o.id === occasion)?.label ?? 'پیام مناسبتی';
     const targetPerson = recipient.trim() || 'عزیز دلم';
-    const sender = settings.myName || 'مهدی';
+    const sender = settings.myName || 'بهمن';
 
     if (!isOnline) {
       const tmpl = OCCASIONS.find((o) => o.id === occasion) ?? OCCASIONS[0];
@@ -311,16 +392,17 @@ export const NightAndMessagesView: React.FC<NightAndMessagesViewProps> = ({
     }
   };
 
-  const handleDiscoverNight = async (mode: 'music' | 'movies') => {
+  const handleDiscoverNight = async (mode: 'music' | 'movies', customMoodOverride?: string) => {
     if (!isOnline) {
       onStatusToast(
         mode === 'music'
-          ? 'جستجوی آهنگ جدید نیاز به اینترنت دارد؛ از صداهای آرامش‌بخش آفلاین همین صفحه استفاده کنید.'
+          ? 'جستجوی پلی‌لیست آنلاین موسیقی نیاز به اینترنت دارد.'
           : 'برای جستجوی فیلم و سریال‌های جدید دوبله به اینترنت نیاز است.'
       );
       return;
     }
 
+    const queryText = mode === 'music' ? (customMoodOverride ?? musicMood) : movieGenre;
     if (mode === 'music') setMusicBusy(true);
     else setMovieBusy(true);
 
@@ -330,18 +412,25 @@ export const NightAndMessagesView: React.FC<NightAndMessagesViewProps> = ({
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({
           mode,
-          moodOrGenre: mode === 'music' ? musicMood : movieGenre,
+          moodOrGenre: queryText,
           mediaType: movieMediaType,
         }),
       });
-      const data = await res.json();
+      const data = (await res.json()) as NightDiscoveryResponse & {error?: string};
       if (!res.ok) throw new Error(data.error || 'خطا در جستجو');
-      onSaveNightResult(data as NightDiscoveryResponse);
-      onStatusToast(
-        mode === 'music'
-          ? 'لیست آهنگ‌های آرامش‌بخش شبانه پیدا شد.'
-          : 'پیشنهادهای فیلم و سریال دوبله با امتیاز بالا آماده شد.'
-      );
+      onSaveNightResult(data);
+      if (mode === 'music') {
+        const list = Array.isArray(data.tracks) ? data.tracks : [];
+        if (list.length > 0) {
+          onStatusToast(`${toPersianDigits(list.length)} قطعه قابل پخش پیدا شد — روی هر کدام بزنید تا پخش شود.`);
+          setCurrentTrackIndex(-1);
+          setIsTrackPlaying(false);
+        } else {
+          onStatusToast('قطعه‌ای پیدا نشد؛ عبارت ساده‌تری مثل «پیانو» یا «شجریان» را امتحان کنید.');
+        }
+      } else {
+        onStatusToast('پیشنهادهای فیلم و سریال دوبله با امتیاز بالا آماده شد.');
+      }
     } catch (err) {
       onStatusToast(err instanceof Error ? err.message : 'خطا در جستجوی شبانه.');
     } finally {
@@ -359,6 +448,31 @@ export const NightAndMessagesView: React.FC<NightAndMessagesViewProps> = ({
 
   return (
     <div className="space-y-8">
+      {/* Hidden shared HTMLAudioElement for online playlist playback */}
+      <audio
+        ref={audioRef}
+        preload="none"
+        onTimeUpdate={() => {
+          if (audioRef.current) setTrackTimeSec(audioRef.current.currentTime || 0);
+        }}
+        onLoadedMetadata={() => {
+          if (audioRef.current && Number.isFinite(audioRef.current.duration) && audioRef.current.duration > 0) {
+            setTrackDurationSec(audioRef.current.duration);
+          }
+          setIsTrackLoading(false);
+        }}
+        onCanPlay={() => setIsTrackLoading(false)}
+        onEnded={() => {
+          if (tracks.length > 1) {
+            handleNextTrack();
+          } else {
+            setIsTrackPlaying(false);
+            setTrackTimeSec(0);
+          }
+        }}
+        onError={handleAudioError}
+      />
+
       {/* Section 1: Special Occasion Message Builder */}
       <section className="rounded-2xl bg-white dark:bg-[#121E1C] border border-slate-200/80 dark:border-emerald-950/70 p-6 sm:p-8 space-y-6">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -376,7 +490,6 @@ export const NightAndMessagesView: React.FC<NightAndMessagesViewProps> = ({
           </div>
         </div>
 
-        {/* Occasion Buttons */}
         <div className="flex flex-wrap gap-2">
           {OCCASIONS.map((item) => (
             <button
@@ -543,148 +656,262 @@ export const NightAndMessagesView: React.FC<NightAndMessagesViewProps> = ({
         </div>
       </section>
 
-      {/* Section 2 & 3: Nighttime Relaxation Music + High-Rated Dubbed Movies/Series */}
+      {/* Section 2 & 3: Real Playable Online Music Playlist + High-Rated Dubbed Movies/Series */}
       <section className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Relaxation Audio (Offline Synthesizer + Online Discovery) */}
+        {/* Real Online Music Playlist & Audio Player */}
         <div className="lg:col-span-5 rounded-2xl bg-white dark:bg-[#121E1C] border border-slate-200/80 dark:border-emerald-950/70 p-6 space-y-5">
-          <div>
-            <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
-              <Music2 className="w-4 h-4 text-emerald-700 dark:text-emerald-400" />
-              <span>آرامش شبانه و خواب راحت</span>
-            </div>
-            <h2 className="mt-1.5 text-lg font-bold text-slate-900 dark:text-white">
-              آهنگ و صدای ریلکسیشن شبانه
-            </h2>
-            <p className="mt-1 text-xs leading-6 text-slate-600 dark:text-slate-300">
-              صدای طبیعت آفلاین بدون نیاز به اینترنت و جستجوی آنلاین آهنگ‌های آرامش‌بخش شبانه
-            </p>
-          </div>
-
-          {/* Offline Sleep Soundscapes */}
-          <div className="space-y-2.5">
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-xs font-bold text-slate-800 dark:text-slate-200">
-                پخش‌کننده صدای آرامش (آفلاین)
-              </span>
-              <div className="flex items-center gap-1.5 text-xs">
-                <Clock className="w-3.5 h-3.5 text-slate-400" />
-                <select
-                  value={sleepMinutes}
-                  onChange={(e) => setSleepMinutes(Number(e.target.value))}
-                  aria-label="تایمر خواب"
-                  className="px-2 py-1 rounded-lg border border-slate-200 dark:border-emerald-900 bg-slate-50 dark:bg-[#0B1312] text-xs"
-                >
-                  <option value={15}>۱۵ دقیقه</option>
-                  <option value={30}>۳۰ دقیقه</option>
-                  <option value={45}>۴۵ دقیقه</option>
-                  <option value={0}>پیوسته</option>
-                </select>
-                {sleepClock && (
-                  <span className="font-mono-num text-emerald-700 dark:text-emerald-400 font-semibold">
-                    {sleepClock}
-                  </span>
-                )}
+          <div className="flex items-start justify-between gap-2">
+            <div>
+              <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+                <Music2 className="w-4 h-4 text-emerald-700 dark:text-emerald-400" />
+                <span>پخش مستقیم آنلاین با تایمر خواب</span>
               </div>
+              <h2 className="mt-1.5 text-lg font-bold text-slate-900 dark:text-white">
+                پلی‌لیست موسیقی و آهنگ‌های واقعی
+              </h2>
             </div>
 
-            {SOUNDSCAPES.map((s) => {
-              const playing = activeSound === s.id;
-              return (
-                <button
-                  key={s.id}
-                  type="button"
-                  onClick={() => startAmbientSound(s.id)}
-                  className={`w-full min-h-[54px] px-4 py-3 rounded-xl border text-right flex items-center justify-between gap-3 transition-colors cursor-pointer ${
-                    playing
-                      ? 'bg-emerald-700 border-emerald-700 text-white'
-                      : 'bg-slate-50/70 dark:bg-[#0B1312] border-slate-200/80 dark:border-emerald-900/70 text-slate-900 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-emerald-950/40'
-                  }`}
-                >
-                  <div>
-                    <div className="text-sm font-bold flex items-center gap-2">
-                      <Waves className="w-4 h-4 shrink-0" />
-                      <span>{s.label}</span>
-                    </div>
-                    <div className={`text-[11px] mt-0.5 ${playing ? 'text-emerald-100' : 'text-slate-500 dark:text-slate-400'}`}>
-                      {s.desc}
-                    </div>
-                  </div>
-                  <span className="min-w-[36px] min-h-[36px] rounded-lg bg-white/15 flex items-center justify-center shrink-0">
-                    {playing ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
-                  </span>
-                </button>
-              );
-            })}
+            <div className="flex items-center gap-1.5 text-xs shrink-0">
+              <Clock className="w-3.5 h-3.5 text-slate-400" />
+              <select
+                value={sleepMinutes}
+                onChange={(e) => {
+                  const val = Number(e.target.value);
+                  setSleepMinutes(val);
+                  if (isTrackPlaying) {
+                    setSleepRemainingSec(val > 0 ? val * 60 : null);
+                  }
+                }}
+                aria-label="تایمر خواب"
+                className="min-h-[36px] px-2 py-1 rounded-lg border border-slate-200 dark:border-emerald-900 bg-slate-50 dark:bg-[#0B1312] text-xs"
+              >
+                <option value={15}>۱۵ دقیقه</option>
+                <option value={30}>۳۰ دقیقه</option>
+                <option value={45}>۴۵ دقیقه</option>
+                <option value={0}>پیوسته</option>
+              </select>
+              {sleepClock && (
+                <span className="font-mono-num text-emerald-700 dark:text-emerald-400 font-semibold">
+                  {sleepClock}
+                </span>
+              )}
+            </div>
           </div>
 
-          {/* Online Music Finder */}
-          <div className="pt-4 border-t border-slate-100 dark:border-emerald-950/60 space-y-3">
-            <label className="block text-xs font-bold text-slate-800 dark:text-slate-200">
-              جستجوی آنلاین آهنگ‌ها و پلی‌لیست‌های ریلکس
-            </label>
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={musicMood}
-                onChange={(e) => setMusicMood(e.target.value)}
-                placeholder="سبک موسیقی شبانه (مثلاً پیانو ملایم، سنتی آرام)"
-                className="flex-1 min-h-[44px] px-3.5 rounded-xl border border-slate-200 dark:border-emerald-900 bg-slate-50/70 dark:bg-[#0B1312] text-xs sm:text-sm text-slate-900 dark:text-white"
-              />
+          {/* Search Form */}
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              handleDiscoverNight('music');
+            }}
+            className="flex gap-2"
+          >
+            <input
+              type="text"
+              value={musicMood}
+              onChange={(e) => setMusicMood(e.target.value)}
+              placeholder="نام خواننده، آهنگ یا حال‌وهوا (مثلاً شجریان، پیانو)..."
+              className="flex-1 min-h-[44px] px-3.5 rounded-xl border border-slate-200 dark:border-emerald-900 bg-slate-50/70 dark:bg-[#0B1312] text-xs sm:text-sm text-slate-900 dark:text-white"
+            />
+            <button
+              type="submit"
+              disabled={musicBusy}
+              className="min-h-[44px] px-4 rounded-xl bg-emerald-700 hover:bg-emerald-800 dark:bg-emerald-600 text-white text-xs sm:text-sm font-semibold flex items-center gap-1.5 cursor-pointer shrink-0 disabled:opacity-60"
+            >
+              {musicBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+              <span>ساخت پلی‌لیست</span>
+            </button>
+          </form>
+
+          {/* Mood Quick Chips */}
+          <div className="flex flex-wrap gap-1.5">
+            {MUSIC_MOOD_PRESETS.map((preset) => (
               <button
+                key={preset}
                 type="button"
                 disabled={musicBusy}
-                onClick={() => handleDiscoverNight('music')}
-                className="min-h-[44px] px-4 rounded-xl bg-slate-900 dark:bg-emerald-600 hover:bg-slate-800 text-white text-xs sm:text-sm font-semibold flex items-center gap-1.5 cursor-pointer shrink-0 disabled:opacity-60"
+                onClick={() => {
+                  setMusicMood(preset);
+                  handleDiscoverNight('music', preset);
+                }}
+                className="min-h-[34px] px-3 rounded-lg bg-slate-100 dark:bg-[#0B1312] hover:bg-emerald-50 dark:hover:bg-emerald-950/60 border border-slate-200/70 dark:border-emerald-900/60 text-[11px] font-medium text-slate-700 dark:text-slate-200 cursor-pointer transition-colors"
               >
-                {musicBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
-                <span>جستجو</span>
+                {preset}
               </button>
-            </div>
+            ))}
+          </div>
 
-            {nightMusicResult && (
-              <div className="rounded-xl bg-slate-50/80 dark:bg-[#0B1312] border border-slate-200/80 dark:border-emerald-900/70 p-4 space-y-3">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs font-bold text-emerald-700 dark:text-emerald-400">
-                    {nightMusicResult.title}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      onSpeakText(nightMusicResult.spokenSummary, nightMusicResult.title, 'custom')
-                    }
-                    className="min-h-[34px] px-2.5 rounded-lg bg-emerald-700 text-white text-[11px] font-semibold flex items-center gap-1 cursor-pointer"
-                  >
-                    <Volume2 className="w-3.5 h-3.5" />
-                    <span>خواندن با صدا</span>
-                  </button>
+          {/* Active Track Audio Player */}
+          {activeTrack && (
+            <div className="rounded-xl bg-emerald-950 text-white p-4 space-y-3">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-xl bg-emerald-900/80 flex items-center justify-center overflow-hidden shrink-0">
+                  {activeTrack.artworkUrl && !failedArtIds[activeTrack.id] ? (
+                    <img
+                      src={activeTrack.artworkUrl}
+                      alt={activeTrack.title}
+                      onError={() => setFailedArtIds((p) => ({...p, [activeTrack.id]: true}))}
+                      className="w-full h-full object-cover"
+                    />
+                  ) : (
+                    <Disc3 className={`w-6 h-6 text-emerald-300 ${isTrackPlaying ? 'animate-spin' : ''}`} />
+                  )}
                 </div>
-                <div className="text-xs leading-6 text-slate-700 dark:text-slate-200 whitespace-pre-line">
-                  {nightMusicResult.markdownText}
-                </div>
-                {nightMusicResult.links.length > 0 && (
-                  <div className="pt-2 border-t border-slate-200/70 dark:border-emerald-950/60 space-y-1.5">
-                    <div className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">
-                      لینک‌های شنیدن و منابع آنلاین:
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      {nightMusicResult.links.map((l) => (
-                        <a
-                          key={l.url}
-                          href={l.url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1 text-xs text-emerald-700 dark:text-emerald-400 hover:underline"
-                        >
-                          <ExternalLink className="w-3 h-3 shrink-0" />
-                          <span className="truncate max-w-[200px]">{l.title}</span>
-                        </a>
-                      ))}
-                    </div>
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm font-bold truncate">{activeTrack.title}</div>
+                  <div className="text-xs text-emerald-200/80 truncate">
+                    {activeTrack.artist} · {sourceLabel(activeTrack)}
                   </div>
+                </div>
+                {activeTrack.isLiveStream && (
+                  <span className="px-2 py-1 rounded-md bg-emerald-800 text-[10px] font-semibold flex items-center gap-1 shrink-0">
+                    <Radio className="w-3 h-3" />
+                    <span>پخش زنده</span>
+                  </span>
                 )}
               </div>
-            )}
-          </div>
+
+              {!activeTrack.isLiveStream && (
+                <div className="space-y-1">
+                  <input
+                    type="range"
+                    min={0}
+                    max={Math.max(1, Math.floor(trackDurationSec || activeTrack.durationSec || 30))}
+                    value={Math.floor(trackTimeSec)}
+                    onChange={handleSeek}
+                    aria-label="نوار زمان پخش"
+                    className="w-full accent-amber-400 cursor-pointer"
+                  />
+                  <div className="flex justify-between text-[11px] font-mono-num text-emerald-200/80">
+                    <span>{formatTrackClock(trackTimeSec)}</span>
+                    <span>{formatTrackClock(trackDurationSec || activeTrack.durationSec || 0)}</span>
+                  </div>
+                </div>
+              )}
+
+              <div className="flex items-center justify-center gap-3 pt-1">
+                <button
+                  type="button"
+                  onClick={handlePrevTrack}
+                  aria-label="آهنگ قبلی"
+                  className="min-w-[44px] min-h-[44px] rounded-xl bg-white/10 hover:bg-white/20 flex items-center justify-center cursor-pointer"
+                >
+                  <SkipForward className="w-4 h-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => togglePlayTrack(currentTrackIndex)}
+                  aria-label={isTrackPlaying ? 'توقف موقت' : 'پخش'}
+                  className="min-w-[52px] min-h-[44px] px-5 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold flex items-center justify-center gap-1.5 cursor-pointer"
+                >
+                  {isTrackLoading ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : isTrackPlaying ? (
+                    <Pause className="w-4 h-4" />
+                  ) : (
+                    <Play className="w-4 h-4" />
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleNextTrack}
+                  aria-label="آهنگ بعدی"
+                  className="min-w-[44px] min-h-[44px] rounded-xl bg-white/10 hover:bg-white/20 flex items-center justify-center cursor-pointer"
+                >
+                  <SkipBack className="w-4 h-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={stopMusicPlayback}
+                  aria-label="توقف کامل"
+                  className="min-w-[44px] min-h-[44px] rounded-xl bg-white/10 hover:bg-rose-600/80 flex items-center justify-center cursor-pointer"
+                >
+                  <Square className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Playable Tracklist */}
+          {tracks.length > 0 ? (
+            <div className="space-y-2 max-h-[430px] overflow-y-auto pr-0.5">
+              {tracks.map((track, idx) => {
+                const isSelected = currentTrackIndex === idx;
+                const playingNow = isSelected && isTrackPlaying;
+                return (
+                  <div
+                    key={track.id}
+                    className={`rounded-xl border p-2.5 flex items-center gap-3 transition-colors ${
+                      isSelected
+                        ? 'bg-emerald-50 dark:bg-emerald-950/60 border-emerald-500/70 dark:border-emerald-700'
+                        : 'bg-slate-50/70 dark:bg-[#0B1312] border-slate-200/80 dark:border-emerald-900/60 hover:bg-slate-100/80 dark:hover:bg-emerald-950/40'
+                    }`}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => togglePlayTrack(idx)}
+                      className="flex-1 min-w-0 flex items-center gap-3 text-right cursor-pointer min-h-[44px]"
+                    >
+                      <div className="w-11 h-11 rounded-lg bg-emerald-100 dark:bg-emerald-950 flex items-center justify-center overflow-hidden shrink-0">
+                        {track.artworkUrl && !failedArtIds[track.id] ? (
+                          <img
+                            src={track.artworkUrl}
+                            alt={track.title}
+                            onError={() => setFailedArtIds((p) => ({...p, [track.id]: true}))}
+                            className="w-full h-full object-cover"
+                          />
+                        ) : (
+                          <Music2 className="w-5 h-5 text-emerald-700 dark:text-emerald-400" />
+                        )}
+                      </div>
+
+                      <div className="min-w-0 flex-1">
+                        <div className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white truncate">
+                          {track.title}
+                        </div>
+                        <div className="text-[11px] text-slate-500 dark:text-slate-400 truncate mt-0.5">
+                          {track.artist} · {sourceLabel(track)}
+                          {track.durationSec ? ` · ${formatTrackClock(track.durationSec)}` : ''}
+                        </div>
+                      </div>
+
+                      <span
+                        className={`min-w-[38px] min-h-[38px] rounded-lg flex items-center justify-center shrink-0 ${
+                          playingNow
+                            ? 'bg-emerald-700 text-white'
+                            : 'bg-white dark:bg-[#121E1C] border border-slate-200 dark:border-emerald-900 text-emerald-700 dark:text-emerald-300'
+                        }`}
+                      >
+                        {isSelected && isTrackLoading ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : playingNow ? (
+                          <Pause className="w-4 h-4" />
+                        ) : (
+                          <Play className="w-4 h-4" />
+                        )}
+                      </span>
+                    </button>
+
+                    {track.externalUrl && (
+                      <a
+                        href={track.externalUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        aria-label={`صفحه ${track.title}`}
+                        className="min-w-[36px] min-h-[36px] rounded-lg text-slate-400 hover:text-emerald-700 dark:hover:text-emerald-300 flex items-center justify-center shrink-0"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5" />
+                      </a>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="rounded-xl border border-dashed border-slate-200 dark:border-emerald-900/70 py-10 px-4 text-center text-xs sm:text-sm text-slate-500 dark:text-slate-400">
+              نام خواننده یا حال‌وهوای دلخواه را بنویسید (یا یکی از دکمه‌های بالا را بزنید) تا پلی‌لیست واقعی و قابل پخش ساخته شود.
+            </div>
+          )}
         </div>
 
         {/* High-Rated Persian-Dubbed Movies & Series Discovery + Auto Night Notification */}
@@ -724,7 +951,6 @@ export const NightAndMessagesView: React.FC<NightAndMessagesViewProps> = ({
             </div>
           </div>
 
-          {/* Automatic Nightly Check Bar */}
           <div className="rounded-xl bg-slate-50/80 dark:bg-[#0B1312] border border-slate-200/80 dark:border-emerald-900/70 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div className="flex items-start gap-2.5">
               <BellRing className="w-4 h-4 text-emerald-700 dark:text-emerald-400 shrink-0 mt-0.5" />

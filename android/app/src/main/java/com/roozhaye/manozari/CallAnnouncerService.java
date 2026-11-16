@@ -68,27 +68,26 @@ public class CallAnnouncerService extends Service {
     }
 
     public static void announce(Context context, String title, String text, String voiceName, boolean isMale, int repeatCount, boolean isCall) {
-        Intent intent = new Intent(context, CallAnnouncerService.class);
+        final Context appCtx = context.getApplicationContext();
+        final int safeRepeat = Math.max(1, Math.min(2, repeatCount));
+        Intent intent = new Intent(appCtx, CallAnnouncerService.class);
         intent.putExtra(EXTRA_TITLE, title);
         intent.putExtra(EXTRA_TEXT, text);
         intent.putExtra(EXTRA_IS_MALE, isMale);
         intent.putExtra(EXTRA_VOICE_NAME, voiceName);
-        intent.putExtra(EXTRA_REPEAT, Math.max(1, Math.min(2, repeatCount)));
+        intent.putExtra(EXTRA_REPEAT, safeRepeat);
         intent.putExtra(EXTRA_IS_CALL, isCall);
 
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent);
+                appCtx.startForegroundService(intent);
                 return;
             }
-            context.startService(intent);
+            appCtx.startService(intent);
         } catch (Exception e) {
-            // Android 12+ may restrict startForegroundService from background if overlay/battery exemptions aren't granted yet.
-            try {
-                context.startService(intent);
-            } catch (Exception ignored) {
-                postDirectFallbackNotification(context, title, text);
-            }
+            // Android 12–15 (HyperOS/MIUI) may throw ForegroundServiceStartNotAllowedException from background;
+            // fall back immediately to direct worker-thread MediaPlayer + WakeLock inside app process.
+            playDirectFromBackground(appCtx, title, text, voiceName, isMale, safeRepeat, isCall);
         }
     }
 
@@ -99,8 +98,17 @@ public class CallAnnouncerService extends Service {
         }
     }
 
-    public static boolean saveWavToCache(Context context, String text, String voiceName, byte[] wavBytes) {
-        if (text == null || text.trim().isEmpty() || wavBytes == null || wavBytes.length <= 44) {
+    private static boolean isRiffWav(byte[] data) {
+        return data != null
+                && data.length > 44
+                && data[0] == 'R'
+                && data[1] == 'I'
+                && data[2] == 'F'
+                && data[3] == 'F';
+    }
+
+    public static boolean saveWavToCache(Context context, String text, String voiceName, byte[] audioBytes) {
+        if (text == null || text.trim().isEmpty() || audioBytes == null || audioBytes.length <= 44) {
             return false;
         }
         try {
@@ -109,14 +117,102 @@ public class CallAnnouncerService extends Service {
                 cacheDir.mkdirs();
             }
             String key = sha256Hex(voiceName + "::" + text.trim());
-            File cachedFile = new File(cacheDir, key + ".wav");
+            String ext = isRiffWav(audioBytes) ? ".wav" : ".mp3";
+            File cachedFile = new File(cacheDir, key + ext);
             try (FileOutputStream fos = new FileOutputStream(cachedFile)) {
-                fos.write(wavBytes);
+                fos.write(audioBytes);
             }
             return true;
         } catch (Exception ignored) {
             return false;
         }
+    }
+
+    private static void playDirectFromBackground(
+            Context appCtx,
+            String title,
+            String rawText,
+            String voiceName,
+            boolean isMale,
+            int repeatCount,
+            boolean isCall
+    ) {
+        final String text = rawText != null ? rawText.trim() : "";
+        if (text.isEmpty()) return;
+
+        new Thread(() -> {
+            PowerManager.WakeLock localLock = null;
+            try {
+                PowerManager pm = (PowerManager) appCtx.getSystemService(Context.POWER_SERVICE);
+                if (pm != null) {
+                    localLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "RoozhayeManOZari::DirectBgLock");
+                    localLock.setReferenceCounted(false);
+                    localLock.acquire(25000L);
+                }
+                Thread.sleep(isCall ? 220L : 100L);
+                File audioFile = fetchOrGetCachedAudioStatic(appCtx, text, voiceName);
+                if (audioFile != null && audioFile.exists() && audioFile.length() > 44) {
+                    final MediaPlayer mp = new MediaPlayer();
+                    AudioAttributes attrs = new AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                            .build();
+                    mp.setAudioAttributes(attrs);
+                    mp.setDataSource(audioFile.getAbsolutePath());
+                    mp.prepare();
+                    final PowerManager.WakeLock lockToRelease = localLock;
+                    final int[] remaining = {Math.max(1, Math.min(2, repeatCount))};
+                    mp.setOnCompletionListener(player -> {
+                        remaining[0]--;
+                        if (remaining[0] > 0) {
+                            try {
+                                player.seekTo(0);
+                                player.start();
+                                return;
+                            } catch (Exception ignored) {
+                            }
+                        }
+                        try {
+                            player.release();
+                        } catch (Exception ignored) {
+                        }
+                        try {
+                            if (lockToRelease != null && lockToRelease.isHeld()) lockToRelease.release();
+                        } catch (Exception ignored) {
+                        }
+                    });
+                    mp.setOnErrorListener((player, what, extra) -> {
+                        try {
+                            player.release();
+                        } catch (Exception ignored) {
+                        }
+                        try {
+                            if (lockToRelease != null && lockToRelease.isHeld()) lockToRelease.release();
+                        } catch (Exception ignored) {
+                        }
+                        postDirectFallbackNotification(appCtx, title, text);
+                        return true;
+                    });
+                    mp.start();
+                    localLock = null; // released on completion
+                    return;
+                }
+            } catch (Exception ignored) {
+            } finally {
+                try {
+                    if (localLock != null && localLock.isHeld()) localLock.release();
+                } catch (Exception ignored) {
+                }
+            }
+            new Handler(Looper.getMainLooper()).post(() -> {
+                String spoken = repeatCount == 2 ? (text + " . " + text) : text;
+                BilingualSpeechHelper.speak(appCtx, spoken, isMale, 1.0f, false, success -> {
+                    if (!success) {
+                        postDirectFallbackNotification(appCtx, title, text);
+                    }
+                });
+            });
+        }).start();
     }
 
     @Override
@@ -284,18 +380,26 @@ public class CallAnnouncerService extends Service {
     }
 
     private File fetchOrGetCachedWav(String text, String voiceName) {
+        return fetchOrGetCachedAudioStatic(this, text, voiceName);
+    }
+
+    private static File fetchOrGetCachedAudioStatic(Context context, String text, String voiceName) {
         try {
-            File cacheDir = new File(getCacheDir(), "rmz_tts_wav");
+            File cacheDir = new File(context.getCacheDir(), "rmz_tts_wav");
             if (!cacheDir.exists()) {
                 cacheDir.mkdirs();
             }
             String key = sha256Hex(voiceName + "::" + text.trim());
-            File cachedFile = new File(cacheDir, key + ".wav");
-            if (cachedFile.exists() && cachedFile.length() > 44) {
-                return cachedFile;
+            File wavFile = new File(cacheDir, key + ".wav");
+            if (wavFile.exists() && wavFile.length() > 44) {
+                return wavFile;
+            }
+            File mp3File = new File(cacheDir, key + ".mp3");
+            if (mp3File.exists() && mp3File.length() > 44) {
+                return mp3File;
             }
 
-            SharedPreferences prefs = getSharedPreferences("rmz_native_prefs", MODE_PRIVATE);
+            SharedPreferences prefs = context.getSharedPreferences("rmz_native_prefs", MODE_PRIVATE);
             String baseUrl = prefs.getString("server_base_url", DEFAULT_API_BASE);
             if (baseUrl == null || baseUrl.trim().isEmpty()) {
                 baseUrl = DEFAULT_API_BASE;
@@ -305,8 +409,8 @@ public class CallAnnouncerService extends Service {
             URL url = new URL(baseUrl + "/api/tts");
             HttpURLConnection conn = (HttpURLConnection) url.openConnection();
             conn.setRequestMethod("POST");
-            conn.setConnectTimeout(6000);
-            conn.setReadTimeout(15000);
+            conn.setConnectTimeout(7000);
+            conn.setReadTimeout(16000);
             conn.setDoOutput(true);
             conn.setRequestProperty("Content-Type", "application/json; charset=UTF-8");
 
@@ -343,14 +447,17 @@ public class CallAnnouncerService extends Service {
                 return null;
             }
 
-            byte[] wavBytes = Base64.decode(audioB64, Base64.DEFAULT);
-            if (wavBytes.length <= 44) {
+            byte[] audioBytes = Base64.decode(audioB64, Base64.DEFAULT);
+            if (audioBytes.length <= 44) {
                 return null;
             }
-            try (FileOutputStream fos = new FileOutputStream(cachedFile)) {
-                fos.write(wavBytes);
+            String mimeType = resp.optString("mimeType", "");
+            boolean isWav = mimeType.contains("wav") || isRiffWav(audioBytes);
+            File targetFile = isWav ? wavFile : mp3File;
+            try (FileOutputStream fos = new FileOutputStream(targetFile)) {
+                fos.write(audioBytes);
             }
-            return cachedFile;
+            return targetFile;
         } catch (Exception ignored) {
             return null;
         }

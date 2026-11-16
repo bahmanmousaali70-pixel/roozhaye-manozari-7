@@ -57,6 +57,8 @@ import {
 import {getCloudApiBaseUrl} from './services/apiConfig';
 import {
   getNativeCapabilities,
+  openAppInfoSettings,
+  openNotificationListenerSettings,
   precacheNativeWav,
   requestNativePermissionsAndMiuiSetup,
   setNativeKeepAliveService,
@@ -104,7 +106,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   theme: 'light',
   defaultVoice: 'Kore',
   speechRate: 1,
-  myName: 'مهدی',
+  myName: 'بهمن',
   partnerName: 'زری',
   backgroundKeepAlive: false,
   announceCalls: true,
@@ -128,10 +130,18 @@ export default function App() {
   const isOnline = useOnlineStatus();
   const [activeTab, setActiveTab] = useState<AppTab>('today');
 
-  const [settings, setSettings] = useState<AppSettings>(() => ({
-    ...DEFAULT_SETTINGS,
-    ...readJsonStorage<Partial<AppSettings>>(STORAGE_KEYS.settings, {}),
-  }));
+  const [settings, setSettings] = useState<AppSettings>(() => {
+    const saved = readJsonStorage<Partial<AppSettings>>(STORAGE_KEYS.settings, {});
+    const normalizedMyName =
+      typeof saved.myName === 'string' && saved.myName.trim() && saved.myName.trim() !== 'مهدی'
+        ? saved.myName.trim()
+        : 'بهمن';
+    return {
+      ...DEFAULT_SETTINGS,
+      ...saved,
+      myName: normalizedMyName,
+    };
+  });
 
   const [goals, setGoals] = useState<GoalItem[]>(() =>
     readJsonStorage<GoalItem[]>(STORAGE_KEYS.goals, DEFAULT_GOALS)
@@ -184,6 +194,7 @@ export default function App() {
     callLog: false,
     contacts: false,
     sms: false,
+    notificationListener: false,
     notifications: false,
     batteryIgnored: false,
     overlay: false,
@@ -263,15 +274,22 @@ export default function App() {
     localStorage.setItem(STORAGE_KEYS.triggeredAuto, JSON.stringify(triggeredAutoMap));
   }, [triggeredAutoMap]);
 
-  // Check native Android capabilities and sync server URL on mount
+  // Check native Android capabilities and sync server URL on mount and when returning from Settings
   useEffect(() => {
     getNativeCapabilities().then(setNativeCaps);
     syncServerBaseUrlToNative(getCloudApiBaseUrl());
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        getNativeCapabilities().then(setNativeCaps);
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
   }, []);
 
   // Firebase Auth listener + automatic space discovery & real-time sync
   useEffect(() => {
-    checkRedirectSignIn();
+    checkRedirectSignIn().catch(() => {});
     let unsubSpace: (() => void) | null = null;
 
     const unsubAuth = onAuthStateChanged(auth, async (user) => {
@@ -300,11 +318,18 @@ export default function App() {
           onGratitudes: (cloudGratitudes) => setGratitudes(cloudGratitudes),
           onCallers: (cloudCallers) => setCallers(cloudCallers),
           onSchedules: (cloudSchedules) => setSchedules(cloudSchedules),
-          onSettings: (cloudSettings) => setSettings(cloudSettings),
+          onSettings: (cloudSettings) =>
+            setSettings((prev) => ({
+              ...DEFAULT_SETTINGS,
+              ...prev,
+              ...cloudSettings,
+              myName: cloudSettings.myName === 'مهدی' ? 'بهمن' : cloudSettings.myName || 'بهمن',
+            })),
           onError: (msg) => console.warn('Cloud sync listener notice:', msg),
         });
       } catch (err) {
         console.warn('Cloud discovery error:', err);
+        showToast('ورود انجام شد، اما بارگذاری فضای مشترک ابری با تاخیر مواجه شد؛ داده‌های گوشی شما فعال هستند.');
       } finally {
         setCloudBusy(false);
       }
@@ -314,7 +339,7 @@ export default function App() {
       unsubAuth();
       if (unsubSpace) unsubSpace();
     };
-  }, []);
+  }, [showToast]);
 
   const refreshClips = useCallback(async () => {
     try {
@@ -768,6 +793,20 @@ export default function App() {
     }
   };
 
+  const handleOpenNotificationListenerSettings = async () => {
+    const ok = await openNotificationListenerSettings();
+    if (!ok) {
+      showToast('تنظیمات دسترسی اعلان‌ها فقط در نسخه اندروید (APK) در دسترس است.');
+    }
+  };
+
+  const handleOpenAppInfoSettings = async () => {
+    const ok = await openAppInfoSettings();
+    if (!ok) {
+      showToast('تنظیمات برنامه فقط در نسخه اندروید (APK) در دسترس است.');
+    }
+  };
+
   const handleCycleOfflineMessage = () => {
     const idx = OFFLINE_MORNING_MESSAGES.findIndex((m) => m.id === morningMessage.id);
     const next = OFFLINE_MORNING_MESSAGES[(idx + 1) % OFFLINE_MORNING_MESSAGES.length];
@@ -1096,6 +1135,8 @@ export default function App() {
             onJoinSpaceByCode={handleJoinSpaceByCode}
             onPushLocalToCloud={handlePushLocalToCloud}
             onRequestNativePermissions={handleRequestNativePermissions}
+            onOpenNotificationListenerSettings={handleOpenNotificationListenerSettings}
+            onOpenAppInfoSettings={handleOpenAppInfoSettings}
             onStatusToast={showToast}
           />
         )}
