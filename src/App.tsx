@@ -1,5 +1,5 @@
 import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
-import {WifiOff} from 'lucide-react';
+import {WifiOff, X} from 'lucide-react';
 import {CallerAnnouncerView} from './components/CallerAnnouncerView';
 import {GratitudeView} from './components/GratitudeView';
 import {NightAndMessagesView} from './components/NightAndMessagesView';
@@ -59,6 +59,7 @@ import {
   getNativeCapabilities,
   openAppInfoSettings,
   openNotificationListenerSettings,
+  openXiaomiOtherPermissions,
   precacheNativeWav,
   requestNativePermissionsAndMiuiSetup,
   setNativeKeepAliveService,
@@ -244,13 +245,18 @@ export default function App() {
     localStorage.setItem(STORAGE_KEYS.callers, JSON.stringify(callers));
     syncCallersToNative(callers);
     callers.forEach((c) => {
-      const script = c.template.replace('{name}', c.name);
-      const id = hashTextKey(script, c.voiceName);
-      getAudioClipBuffer(id)
-        .then((buf) => {
-          if (buf) precacheNativeWav(script, c.voiceName, buf);
-        })
-        .catch(() => {});
+      const names = c.persianPhonetic?.trim()
+        ? Array.from(new Set([c.name, c.persianPhonetic.trim()]))
+        : [c.name];
+      names.forEach((n) => {
+        const script = c.template.replace('{name}', n);
+        const id = hashTextKey(script, c.voiceName);
+        getAudioClipBuffer(id)
+          .then((buf) => {
+            if (buf) precacheNativeWav(script, c.voiceName, buf);
+          })
+          .catch(() => {});
+      });
     });
   }, [callers]);
 
@@ -807,6 +813,13 @@ export default function App() {
     }
   };
 
+  const handleOpenXiaomiOtherPermissions = async () => {
+    const ok = await openXiaomiOtherPermissions();
+    if (!ok) {
+      showToast('بخش مجوزهای دیگر شیائومی فقط در نسخه اندروید (APK) در دسترس است.');
+    }
+  };
+
   const handleCycleOfflineMessage = () => {
     const idx = OFFLINE_MORNING_MESSAGES.findIndex((m) => m.id === morningMessage.id);
     const next = OFFLINE_MORNING_MESSAGES[(idx + 1) % OFFLINE_MORNING_MESSAGES.length];
@@ -1137,6 +1150,7 @@ export default function App() {
             onRequestNativePermissions={handleRequestNativePermissions}
             onOpenNotificationListenerSettings={handleOpenNotificationListenerSettings}
             onOpenAppInfoSettings={handleOpenAppInfoSettings}
+            onOpenXiaomiOtherPermissions={handleOpenXiaomiOtherPermissions}
             onStatusToast={showToast}
           />
         )}
@@ -1154,8 +1168,16 @@ export default function App() {
       )}
 
       {toast && (
-        <div className="fixed bottom-20 md:bottom-5 right-4 left-4 md:left-auto md:max-w-md z-50 rounded-xl bg-slate-900 dark:bg-emerald-800 text-white px-4 py-3 text-xs sm:text-sm font-medium shadow-xl">
-          {toast}
+        <div className="fixed top-16 md:top-20 right-4 left-4 md:left-auto md:max-w-md z-50 flex items-start justify-between gap-2 rounded-xl bg-slate-900 dark:bg-emerald-800 text-white px-4 py-3 text-xs sm:text-sm font-medium shadow-xl">
+          <span className="leading-6">{toast}</span>
+          <button
+            type="button"
+            onClick={() => setToast(null)}
+            aria-label="بستن پیام"
+            className="shrink-0 p-1 rounded-lg text-white/80 hover:text-white hover:bg-white/10 cursor-pointer"
+          >
+            <X className="w-4 h-4" />
+          </button>
         </div>
       )}
     </div>

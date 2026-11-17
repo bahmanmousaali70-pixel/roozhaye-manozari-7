@@ -92,6 +92,12 @@ public class BilingualSpeechHelper {
                     return;
                 }
 
+                // Convert mixed Latin/Finglish names & words (e.g. Bahman Mousaali, salam) into clean Persian script
+                // when speaking Persian sentences so Android TTS doesn't choke switching languages mid-utterance.
+                String preparedText = hasPersianSupport
+                        ? FinglishPhoneticHelper.transliterateToPersianPhonetic(text)
+                        : text;
+
                 AudioAttributes attrs = new AudioAttributes.Builder()
                         .setUsage(ringtoneStream ? AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE : AudioAttributes.USAGE_MEDIA)
                         .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
@@ -100,7 +106,7 @@ public class BilingualSpeechHelper {
                 tts.setPitch(isMale ? 0.78f : 1.08f);
                 tts.setSpeechRate(Math.max(0.6f, Math.min(1.6f, rate)));
 
-                List<Segment> segments = splitBilingual(text);
+                List<Segment> segments = splitBilingual(preparedText);
                 if (segments.isEmpty()) {
                     tts.shutdown();
                     if (settled.compareAndSet(false, true) && callback != null) {

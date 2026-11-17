@@ -91,7 +91,20 @@ public class CallAnnouncerService extends Service {
         }
     }
 
+    private static volatile MediaPlayer activeDirectPlayer = null;
+
     public static void stopActive(Context context) {
+        if (activeDirectPlayer != null) {
+            try {
+                if (activeDirectPlayer.isPlaying()) activeDirectPlayer.stop();
+            } catch (Exception ignored) {
+            }
+            try {
+                activeDirectPlayer.release();
+            } catch (Exception ignored) {
+            }
+            activeDirectPlayer = null;
+        }
         try {
             context.stopService(new Intent(context, CallAnnouncerService.class));
         } catch (Exception ignored) {
@@ -160,6 +173,7 @@ public class CallAnnouncerService extends Service {
                     mp.setAudioAttributes(attrs);
                     mp.setDataSource(audioFile.getAbsolutePath());
                     mp.prepare();
+                    activeDirectPlayer = mp;
                     final PowerManager.WakeLock lockToRelease = localLock;
                     final int[] remaining = {Math.max(1, Math.min(2, repeatCount))};
                     mp.setOnCompletionListener(player -> {
@@ -172,6 +186,7 @@ public class CallAnnouncerService extends Service {
                             } catch (Exception ignored) {
                             }
                         }
+                        if (activeDirectPlayer == player) activeDirectPlayer = null;
                         try {
                             player.release();
                         } catch (Exception ignored) {
@@ -182,6 +197,7 @@ public class CallAnnouncerService extends Service {
                         }
                     });
                     mp.setOnErrorListener((player, what, extra) -> {
+                        if (activeDirectPlayer == player) activeDirectPlayer = null;
                         try {
                             player.release();
                         } catch (Exception ignored) {
@@ -249,7 +265,7 @@ public class CallAnnouncerService extends Service {
         Notification notification = new NotificationCompat.Builder(this, CHANNEL_ID)
                 .setContentTitle(title != null ? title : "روزهای من و زری")
                 .setContentText(text)
-                .setSmallIcon(R.mipmap.ic_launcher)
+                .setSmallIcon(R.drawable.ic_stat_rmz)
                 .setPriority(NotificationCompat.PRIORITY_LOW)
                 .build();
 
@@ -550,7 +566,7 @@ public class CallAnnouncerService extends Service {
                     PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
             );
             Notification notif = new NotificationCompat.Builder(context, CHANNEL_ID)
-                    .setSmallIcon(R.mipmap.ic_launcher)
+                    .setSmallIcon(R.drawable.ic_stat_rmz)
                     .setContentTitle(title != null ? title : "روزهای من و زری")
                     .setContentText(body + " (برای صدای روان، اینترنت/فیلترشکن را بررسی کنید)")
                     .setStyle(new NotificationCompat.BigTextStyle().bigText(body))

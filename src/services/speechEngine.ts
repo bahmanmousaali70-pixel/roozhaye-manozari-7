@@ -7,7 +7,7 @@ import {
   hashTextKey,
   saveAudioClip,
 } from './audioLibraryDb';
-import {isNativeAndroid, precacheNativeWav, speakNativeBilingual} from './nativeAndroidBridge';
+import {isNativeAndroid, precacheNativeWav, speakNativeBilingual, stopNativeAudio} from './nativeAndroidBridge';
 
 let sharedAudioCtx: AudioContext | null = null;
 let activeSourceNode: AudioBufferSourceNode | null = null;
@@ -96,6 +96,9 @@ export function stopAllSpeech(): void {
   }
   if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
     window.speechSynthesis.cancel();
+  }
+  if (isNativeAndroid()) {
+    stopNativeAudio().catch(() => {});
   }
 }
 

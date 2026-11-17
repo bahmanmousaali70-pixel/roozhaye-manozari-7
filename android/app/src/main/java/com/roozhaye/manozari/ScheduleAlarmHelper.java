@@ -34,6 +34,7 @@ public class ScheduleAlarmHelper {
                 intent.putExtra("spoken_text", item.optString("spokenText", ""));
                 intent.putExtra("days", item.optString("days", "daily"));
                 intent.putExtra("is_male", "male".equals(item.optString("voiceGender", "female")));
+                intent.putExtra("voice_name", item.optString("voiceName", ""));
                 intent.putExtra("auto_open", item.optBoolean("autoOpen", false));
 
                 PendingIntent pi = PendingIntent.getBroadcast(

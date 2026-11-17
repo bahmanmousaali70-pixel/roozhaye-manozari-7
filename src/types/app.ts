@@ -129,7 +129,7 @@ export interface MusicTrack {
   streamUrl: string;
   durationSec?: number;
   isLiveStream?: boolean;
-  source: 'audius' | 'itunes' | 'deezer' | 'radio';
+  source: 'audius' | 'archive' | 'radio';
   externalUrl?: string;
 }
 

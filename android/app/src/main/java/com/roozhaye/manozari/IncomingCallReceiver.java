@@ -101,7 +101,8 @@ public class IncomingCallReceiver extends BroadcastReceiver {
                     : "تماس ناشناس";
         }
 
-        String spokenText = "تماس ورودی از طرف " + callerName;
+        String displayOrPhonetic = FinglishPhoneticHelper.resolveSenderDisplayName(context, callerName);
+        String spokenText = "تماس ورودی از طرف " + displayOrPhonetic;
         boolean isMale = "male".equals(prefs.getString("default_voice_gender", "female"));
         String voiceName = prefs.getString("default_voice_name", isMale ? "Charon" : "Kore");
         int repeat = 2;
@@ -114,10 +115,12 @@ public class IncomingCallReceiver extends BroadcastReceiver {
                 JSONObject obj = arr.getJSONObject(i);
                 String name = obj.optString("name", "").trim();
                 String latinAlias = obj.optString("latinAlias", "").trim();
+                String phonetic = obj.optString("persianPhonetic", "").trim();
                 if ((!name.isEmpty() && name.equalsIgnoreCase(normalizedTarget))
                         || (!latinAlias.isEmpty() && latinAlias.equalsIgnoreCase(normalizedTarget))) {
                     String template = obj.optString("template", "تماس ورودی از طرف {name}");
-                    spokenText = template.replace("{name}", name);
+                    String nameForSpeech = !phonetic.isEmpty() ? phonetic : name;
+                    spokenText = template.replace("{name}", nameForSpeech);
                     isMale = "male".equals(obj.optString("voiceGender", "female"));
                     String customVoice = obj.optString("voiceName", "").trim();
                     if (!customVoice.isEmpty()) {

@@ -13,9 +13,21 @@ import android.provider.Settings;
 import androidx.core.app.NotificationCompat;
 
 import java.util.Calendar;
+import java.util.Locale;
 
 public class ScheduleAlarmReceiver extends BroadcastReceiver {
     public static final String CHANNEL_ID = "rmz_schedule_alarm_channel";
+
+    private static String getTodayKey() {
+        Calendar cal = Calendar.getInstance();
+        return String.format(
+                Locale.US,
+                "%04d-%02d-%02d",
+                cal.get(Calendar.YEAR),
+                cal.get(Calendar.MONTH) + 1,
+                cal.get(Calendar.DAY_OF_MONTH)
+        );
+    }
 
     @Override
     public void onReceive(Context context, Intent intent) {
@@ -26,15 +38,32 @@ public class ScheduleAlarmReceiver extends BroadcastReceiver {
         String spokenText = intent.getStringExtra("spoken_text");
         String days = intent.getStringExtra("days");
         boolean isMale = intent.getBooleanExtra("is_male", false);
+        String voiceName = intent.getStringExtra("voice_name");
         boolean autoOpen = intent.getBooleanExtra("auto_open", false);
 
         SharedPreferences prefs = context.getSharedPreferences("rmz_native_prefs", Context.MODE_PRIVATE);
         boolean allowAutoOpen = autoOpen && prefs.getBoolean("auto_open_morning_enabled", true);
 
         if (matchesDay(days)) {
+            String safeId = scheduleId != null ? scheduleId : "alarm";
+            String todayKey = getTodayKey();
+            String firedKey = "fired_today_" + safeId;
+            long now = System.currentTimeMillis();
+            long lastFiredMs = prefs.getLong("fired_ms_" + todayKey + "_" + safeId, 0L);
+
+            // Prevent duplicate alarm execution if OS re-delivers alarm quickly
+            if (now - lastFiredMs < 45000L) {
+                ScheduleAlarmHelper.rescheduleAll(context);
+                return;
+            }
+            prefs.edit()
+                    .putString(firedKey, todayKey)
+                    .putLong("fired_ms_" + todayKey + "_" + safeId, now)
+                    .apply();
+
             postHighPriorityNotification(
                     context,
-                    scheduleId != null ? scheduleId : "alarm",
+                    safeId,
                     title,
                     spokenText,
                     allowAutoOpen
@@ -46,7 +75,7 @@ public class ScheduleAlarmReceiver extends BroadcastReceiver {
                     if (canOverlay) {
                         Intent launch = new Intent(context, MainActivity.class);
                         launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
-                        launch.putExtra("playSchedule", scheduleId);
+                        launch.putExtra("playSchedule", safeId);
                         context.startActivity(launch);
                     }
                 } catch (Exception ignored) {
@@ -54,14 +83,26 @@ public class ScheduleAlarmReceiver extends BroadcastReceiver {
             }
 
             if (spokenText != null && !spokenText.trim().isEmpty()) {
-                CallAnnouncerService.announce(
-                        context,
-                        title != null ? title : "روزهای من و زری",
-                        spokenText,
-                        isMale,
-                        1,
-                        false
-                );
+                if (voiceName != null && !voiceName.trim().isEmpty()) {
+                    CallAnnouncerService.announce(
+                            context,
+                            title != null ? title : "روزهای من و زری",
+                            spokenText,
+                            voiceName.trim(),
+                            isMale,
+                            1,
+                            false
+                    );
+                } else {
+                    CallAnnouncerService.announce(
+                            context,
+                            title != null ? title : "روزهای من و زری",
+                            spokenText,
+                            isMale,
+                            1,
+                            false
+                    );
+                }
             }
         }
 
@@ -101,7 +142,7 @@ public class ScheduleAlarmReceiver extends BroadcastReceiver {
         );
 
         NotificationCompat.Builder builder = new NotificationCompat.Builder(context, CHANNEL_ID)
-                .setSmallIcon(R.mipmap.ic_launcher)
+                .setSmallIcon(R.drawable.ic_stat_rmz)
                 .setContentTitle(title != null ? title : "روزهای من و زری")
                 .setContentText(body != null ? body : "زمان یادآور روزانه فرا رسید")
                 .setStyle(new NotificationCompat.BigTextStyle().bigText(body))

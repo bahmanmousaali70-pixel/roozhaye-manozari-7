@@ -129,8 +129,8 @@ function formatTrackClock(seconds: number): string {
 
 function sourceLabel(track: MusicTrack): string {
   if (track.isLiveStream || track.source === 'radio') return 'رادیو زنده';
-  if (track.source === 'audius') return 'پخش کامل';
-  return 'پیش‌نمایش ۳۰ ثانیه‌ای';
+  if (track.source === 'archive') return 'پخش کامل (آرشیو موسیقی)';
+  return 'پخش کامل';
 }
 
 export const NightAndMessagesView: React.FC<NightAndMessagesViewProps> = ({
@@ -664,10 +664,10 @@ export const NightAndMessagesView: React.FC<NightAndMessagesViewProps> = ({
             <div>
               <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
                 <Music2 className="w-4 h-4 text-emerald-700 dark:text-emerald-400" />
-                <span>پخش مستقیم آنلاین با تایمر خواب</span>
+                <span>پخش مستقیم آنلاین آهنگ‌های کامل و ایستگاه‌های رادیو با تایمر خواب</span>
               </div>
               <h2 className="mt-1.5 text-lg font-bold text-slate-900 dark:text-white">
-                پلی‌لیست موسیقی و آهنگ‌های واقعی
+                پلی‌لیست موسیقی و آهنگ‌های واقعی (نسخه کامل)
               </h2>
             </div>
 
@@ -776,7 +776,7 @@ export const NightAndMessagesView: React.FC<NightAndMessagesViewProps> = ({
                   <input
                     type="range"
                     min={0}
-                    max={Math.max(1, Math.floor(trackDurationSec || activeTrack.durationSec || 30))}
+                    max={Math.max(1, Math.floor(trackDurationSec || activeTrack.durationSec || 180))}
                     value={Math.floor(trackTimeSec)}
                     onChange={handleSeek}
                     aria-label="نوار زمان پخش"

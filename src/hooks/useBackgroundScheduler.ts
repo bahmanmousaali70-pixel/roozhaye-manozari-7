@@ -1,6 +1,9 @@
 import {useCallback, useEffect, useRef, useState} from 'react';
 import {getTodayKey} from '../data/persianLibrary';
+import {isNativeAndroid, wasScheduleFiredNatively} from '../services/nativeAndroidBridge';
 import type {ScheduledAnnouncement} from '../types/app';
+
+const dispatchedTodayKeys = new Set<string>();
 
 function createSilentWavBlobUrl(): string {
   const sampleRate = 8000;
@@ -169,28 +172,52 @@ export function useBackgroundScheduler(params: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Periodic scheduler tick (every 15 seconds)
+  // Periodic scheduler tick (every 15 seconds) with native + synchronous dedup guard
+  const isCheckingRef = useRef(false);
   useEffect(() => {
-    const checkSchedules = () => {
-      const now = new Date();
-      const todayKey = getTodayKey(now);
-      const hh = String(now.getHours()).padStart(2, '0');
-      const mm = String(now.getMinutes()).padStart(2, '0');
-      const currentHm = `${hh}:${mm}`;
+    const checkSchedules = async () => {
+      if (isCheckingRef.current) return;
+      isCheckingRef.current = true;
+      try {
+        const now = new Date();
+        const todayKey = getTodayKey(now);
+        const hh = String(now.getHours()).padStart(2, '0');
+        const mm = String(now.getMinutes()).padStart(2, '0');
+        const currentHm = `${hh}:${mm}`;
 
-      for (const item of schedules) {
-        if (!item.enabled) continue;
-        if (item.lastTriggeredDate === todayKey) continue;
-        if (!matchesDayFilter(item.days, now)) continue;
-        if (item.time === currentHm) {
+        for (const item of schedules) {
+          if (!item.enabled) continue;
+          if (item.lastTriggeredDate === todayKey) continue;
+          if (!matchesDayFilter(item.days, now)) continue;
+          if (item.time !== currentHm) continue;
+
+          const lockKey = `${item.id}::${todayKey}`;
+          if (dispatchedTodayKeys.has(lockKey)) continue;
+
+          if (isNativeAndroid()) {
+            // Let native AlarmManager trigger first at :00..:04 without WebView collision
+            if (now.getSeconds() < 5) continue;
+            const firedNatively = await wasScheduleFiredNatively(item.id, todayKey);
+            if (firedNatively) {
+              dispatchedTodayKeys.add(lockKey);
+              onMarkTriggered(item.id, todayKey);
+              continue;
+            }
+          }
+
+          dispatchedTodayKeys.add(lockKey);
           onMarkTriggered(item.id, todayKey);
           onTriggerSchedule(item, false);
         }
+      } finally {
+        isCheckingRef.current = false;
       }
     };
 
-    checkSchedules();
-    const timer = window.setInterval(checkSchedules, 15000);
+    void checkSchedules();
+    const timer = window.setInterval(() => {
+      void checkSchedules();
+    }, 15000);
     return () => window.clearInterval(timer);
   }, [schedules, onMarkTriggered, onTriggerSchedule]);
 

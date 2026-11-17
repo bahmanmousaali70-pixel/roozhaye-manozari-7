@@ -91,7 +91,8 @@ public class NotificationSmsListenerService extends NotificationListenerService 
 
         boolean isMale = "male".equals(prefs.getString("default_voice_gender", "female"));
         String voiceName = prefs.getString("default_voice_name", isMale ? "Charon" : "Kore");
-        String spoken = "پیام جدید از طرف " + title + ". متن پیام: " + body;
+        String spokenSender = FinglishPhoneticHelper.resolveSenderDisplayName(getApplicationContext(), title);
+        String spoken = "پیام جدید از طرف " + spokenSender + ". متن پیام: " + body;
 
         CallAnnouncerService.announce(
                 getApplicationContext(),

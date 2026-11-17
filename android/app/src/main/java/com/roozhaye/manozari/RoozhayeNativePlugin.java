@@ -1,28 +1,44 @@
 package com.roozhaye.manozari;
 
 import android.Manifest;
+import android.app.Activity;
 import android.app.AlarmManager;
 import android.content.ComponentName;
+import android.content.ContentResolver;
+import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.database.Cursor;
 import android.net.Uri;
 import android.os.Build;
+import android.os.Environment;
 import android.os.PowerManager;
+import android.provider.MediaStore;
+import android.provider.OpenableColumns;
 import android.provider.Settings;
 import android.util.Base64;
 
+import androidx.activity.result.ActivityResult;
 import androidx.core.app.ActivityCompat;
 import androidx.core.app.NotificationManagerCompat;
 import androidx.core.content.ContextCompat;
+import androidx.core.content.FileProvider;
 
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
+import com.getcapacitor.annotation.ActivityCallback;
 import com.getcapacitor.annotation.CapacitorPlugin;
 
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -64,7 +80,7 @@ public class RoozhayeNativePlugin extends Plugin {
             ActivityCompat.requestPermissions(getActivity(), needed.toArray(new String[0]), PERM_REQ_CODE);
         }
 
-        // Request battery optimization exemption (critical for MIUI 14)
+        // Request battery optimization exemption (critical for MIUI / HyperOS)
         try {
             PowerManager pm = (PowerManager) ctx.getSystemService(Context.POWER_SERVICE);
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && pm != null && !pm.isIgnoringBatteryOptimizations(ctx.getPackageName())) {
@@ -92,7 +108,7 @@ public class RoozhayeNativePlugin extends Plugin {
     @PluginMethod
     public void openNotificationListenerSettings(PluginCall call) {
         Context ctx = getContext();
-        boolean launched = false;
+        boolean launched;
         try {
             Intent intent = new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS);
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
@@ -109,6 +125,33 @@ public class RoozhayeNativePlugin extends Plugin {
     @PluginMethod
     public void openAppInfoSettings(PluginCall call) {
         boolean launched = openAppDetailsInternal(getContext());
+        JSObject ret = new JSObject();
+        ret.put("ok", launched);
+        call.resolve(ret);
+    }
+
+    @PluginMethod
+    public void openXiaomiOtherPermissions(PluginCall call) {
+        Context ctx = getContext();
+        boolean launched = false;
+        try {
+            Intent permIntent = new Intent("miui.intent.action.APP_PERM_EDITOR");
+            permIntent.setClassName("com.miui.securitycenter", "com.miui.permcenter.permissions.PermissionsEditorActivity");
+            permIntent.putExtra("extra_pkgname", ctx.getPackageName());
+            permIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            ctx.startActivity(permIntent);
+            launched = true;
+        } catch (Exception ignored) {
+            try {
+                Intent permIntent2 = new Intent("miui.intent.action.APP_PERM_EDITOR");
+                permIntent2.putExtra("extra_pkgname", ctx.getPackageName());
+                permIntent2.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                ctx.startActivity(permIntent2);
+                launched = true;
+            } catch (Exception ignored2) {
+                launched = openAppDetailsInternal(ctx);
+            }
+        }
         JSObject ret = new JSObject();
         ret.put("ok", launched);
         call.resolve(ret);
@@ -213,6 +256,177 @@ public class RoozhayeNativePlugin extends Plugin {
         JSObject ret = new JSObject();
         ret.put("count", json != null ? json.length() : 0);
         call.resolve(ret);
+    }
+
+    @PluginMethod
+    public void wasScheduleFiredNatively(PluginCall call) {
+        String scheduleId = call.getString("scheduleId", "");
+        String todayKey = call.getString("todayKey", "");
+        boolean fired = false;
+        if (scheduleId != null && !scheduleId.isEmpty() && todayKey != null && !todayKey.isEmpty()) {
+            SharedPreferences prefs = getContext().getSharedPreferences("rmz_native_prefs", Context.MODE_PRIVATE);
+            String recordedDay = prefs.getString("fired_today_" + scheduleId, "");
+            fired = todayKey.equals(recordedDay);
+        }
+        JSObject ret = new JSObject();
+        ret.put("fired", fired);
+        call.resolve(ret);
+    }
+
+    @PluginMethod
+    public void stopNativeAudio(PluginCall call) {
+        CallAnnouncerService.stopActive(getContext());
+        JSObject ret = new JSObject();
+        ret.put("ok", true);
+        call.resolve(ret);
+    }
+
+    @PluginMethod
+    public void saveBackupJson(PluginCall call) {
+        String filename = call.getString("filename", "man-o-zari-backup.json");
+        String content = call.getString("content", "");
+        boolean shareAfter = Boolean.TRUE.equals(call.getBoolean("shareAfter", false));
+
+        if (content == null || content.isEmpty()) {
+            JSObject ret = new JSObject();
+            ret.put("ok", false);
+            ret.put("error", "محتوای فایل خالی است.");
+            call.resolve(ret);
+            return;
+        }
+
+        Context ctx = getContext();
+        String safeName = (filename != null && !filename.trim().isEmpty())
+                ? filename.replaceAll("[^A-Za-z0-9._-]", "_")
+                : "man-o-zari-backup.json";
+
+        byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
+        boolean savedToDownloads = false;
+        String displayPath = "Download/RoozhayeManOZari/" + safeName;
+
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                ContentResolver resolver = ctx.getContentResolver();
+                ContentValues values = new ContentValues();
+                values.put(MediaStore.Downloads.DISPLAY_NAME, safeName);
+                values.put(MediaStore.Downloads.MIME_TYPE, "application/json");
+                values.put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/RoozhayeManOZari");
+                values.put(MediaStore.Downloads.IS_PENDING, 1);
+
+                Uri itemUri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
+                if (itemUri != null) {
+                    try (OutputStream os = resolver.openOutputStream(itemUri)) {
+                        if (os != null) {
+                            os.write(bytes);
+                            os.flush();
+                            savedToDownloads = true;
+                        }
+                    }
+                    values.clear();
+                    values.put(MediaStore.Downloads.IS_PENDING, 0);
+                    resolver.update(itemUri, values, null, null);
+                }
+            } else {
+                File dir = new File(ctx.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), "RoozhayeManOZari");
+                if (!dir.exists()) dir.mkdirs();
+                File outFile = new File(dir, safeName);
+                try (FileOutputStream fos = new FileOutputStream(outFile)) {
+                    fos.write(bytes);
+                    savedToDownloads = true;
+                }
+                displayPath = outFile.getAbsolutePath();
+            }
+        } catch (Exception ignored) {
+        }
+
+        // Write cache copy for FileProvider sharing sheet
+        boolean shared = false;
+        if (shareAfter) {
+            try {
+                File shareDir = new File(ctx.getCacheDir(), "backups");
+                if (!shareDir.exists()) shareDir.mkdirs();
+                File cacheFile = new File(shareDir, safeName);
+                try (FileOutputStream fos = new FileOutputStream(cacheFile)) {
+                    fos.write(bytes);
+                }
+                Uri contentUri = FileProvider.getUriForFile(ctx, ctx.getPackageName() + ".fileprovider", cacheFile);
+                Intent shareIntent = new Intent(Intent.ACTION_SEND);
+                shareIntent.setType("*/*");
+                shareIntent.putExtra(Intent.EXTRA_STREAM, contentUri);
+                shareIntent.putExtra(Intent.EXTRA_SUBJECT, safeName);
+                shareIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                Intent chooser = Intent.createChooser(shareIntent, "ذخیره یا ارسال فایل پشتیبان روزهای من و زری");
+                chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                ctx.startActivity(chooser);
+                shared = true;
+            } catch (Exception ignored) {
+            }
+        }
+
+        JSObject ret = new JSObject();
+        ret.put("ok", savedToDownloads || shared);
+        ret.put("savedPath", displayPath);
+        ret.put("shared", shared);
+        call.resolve(ret);
+    }
+
+    @PluginMethod
+    public void pickJsonFileNative(PluginCall call) {
+        try {
+            Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+            intent.addCategory(Intent.CATEGORY_OPENABLE);
+            // Allow any MIME type because MIUI/HyperOS file manager frequently indexes .json as octet-stream/text
+            intent.setType("*/*");
+            startActivityForResult(call, intent, "handlePickJsonResult");
+        } catch (Exception e) {
+            JSObject ret = new JSObject();
+            ret.put("ok", false);
+            ret.put("error", "امکان باز کردن انتخابگر فایل وجود نداشت.");
+            call.resolve(ret);
+        }
+    }
+
+    @ActivityCallback
+    private void handlePickJsonResult(PluginCall call, ActivityResult result) {
+        if (call == null) return;
+        if (result.getResultCode() != Activity.RESULT_OK || result.getData() == null || result.getData().getData() == null) {
+            JSObject ret = new JSObject();
+            ret.put("ok", false);
+            ret.put("cancelled", true);
+            call.resolve(ret);
+            return;
+        }
+
+        Uri uri = result.getData().getData();
+        String fileName = "backup.json";
+        try (Cursor c = getContext().getContentResolver().query(uri, null, null, null, null)) {
+            if (c != null && c.moveToFirst()) {
+                int idx = c.getColumnIndex(OpenableColumns.DISPLAY_NAME);
+                if (idx >= 0) fileName = c.getString(idx);
+            }
+        } catch (Exception ignored) {
+        }
+
+        try (InputStream is = getContext().getContentResolver().openInputStream(uri)) {
+            if (is == null) throw new Exception("Empty input stream");
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            byte[] buf = new byte[4096];
+            int n;
+            while ((n = is.read(buf)) != -1) {
+                baos.write(buf, 0, n);
+            }
+            String text = new String(baos.toByteArray(), StandardCharsets.UTF_8);
+            JSObject ret = new JSObject();
+            ret.put("ok", true);
+            ret.put("name", fileName);
+            ret.put("content", text);
+            call.resolve(ret);
+        } catch (Exception e) {
+            JSObject ret = new JSObject();
+            ret.put("ok", false);
+            ret.put("error", "امکان خواندن فایل انتخاب‌شده نبود.");
+            call.resolve(ret);
+        }
     }
 
     @PluginMethod

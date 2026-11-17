@@ -23,6 +23,7 @@ interface NativeSchedulePayload {
   enabled: boolean;
   days: 'daily' | 'weekdays' | 'weekends';
   voiceGender: 'male' | 'female';
+  voiceName?: string;
   spokenText: string;
   autoOpen: boolean;
 }
@@ -43,6 +44,7 @@ interface RoozhayeNativePlugin {
   requestPermissionsAndMiuiSetup(): Promise<NativeCapabilities>;
   openNotificationListenerSettings(): Promise<{ok: boolean}>;
   openAppInfoSettings(): Promise<{ok: boolean}>;
+  openXiaomiOtherPermissions(): Promise<{ok: boolean}>;
   setKeepAliveService(options: {enabled: boolean}): Promise<{running: boolean}>;
   setServerBaseUrl(options: {url: string}): Promise<{ok: boolean}>;
   precacheNativeAudio(options: {text: string; voiceName: string; audioBase64: string}): Promise<{ok: boolean}>;
@@ -55,6 +57,20 @@ interface RoozhayeNativePlugin {
   }): Promise<{ok: boolean}>;
   syncCallers(options: {callersJson: string}): Promise<{count: number}>;
   syncSchedules(options: {schedulesJson: string}): Promise<{count: number}>;
+  wasScheduleFiredNatively(options: {scheduleId: string; todayKey: string}): Promise<{fired: boolean}>;
+  stopNativeAudio(): Promise<{ok: boolean}>;
+  saveBackupJson(options: {
+    filename: string;
+    content: string;
+    shareAfter?: boolean;
+  }): Promise<{ok: boolean; savedPath?: string; shared?: boolean; error?: string}>;
+  pickJsonFileNative(): Promise<{
+    ok: boolean;
+    name?: string;
+    content?: string;
+    cancelled?: boolean;
+    error?: string;
+  }>;
   speakNativeBilingual(options: {text: string; gender: 'male' | 'female'; rate: number}): Promise<{ok: boolean}>;
   testNativeCallAnnouncement(options: {name: string; script: string; gender: 'male' | 'female'; voiceName?: string}): Promise<{ok: boolean}>;
   testNativeSmsAnnouncement(options: {sender: string; body: string; gender: 'male' | 'female'; voiceName?: string}): Promise<{ok: boolean}>;
@@ -150,6 +166,63 @@ export async function openAppInfoSettings(): Promise<boolean> {
   }
 }
 
+export async function openXiaomiOtherPermissions(): Promise<boolean> {
+  if (!isNativeAndroid()) return false;
+  try {
+    const res = await RoozhayeNative.openXiaomiOtherPermissions();
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function wasScheduleFiredNatively(scheduleId: string, todayKey: string): Promise<boolean> {
+  if (!isNativeAndroid()) return false;
+  try {
+    const res = await RoozhayeNative.wasScheduleFiredNatively({scheduleId, todayKey});
+    return Boolean(res.fired);
+  } catch {
+    return false;
+  }
+}
+
+export async function stopNativeAudio(): Promise<void> {
+  if (!isNativeAndroid()) return;
+  try {
+    await RoozhayeNative.stopNativeAudio();
+  } catch {
+    // ignore
+  }
+}
+
+export async function saveBackupJsonNative(
+  filename: string,
+  content: string,
+  shareAfter = false
+): Promise<{ok: boolean; savedPath?: string; shared?: boolean; error?: string}> {
+  if (!isNativeAndroid()) return {ok: false};
+  try {
+    return await RoozhayeNative.saveBackupJson({filename, content, shareAfter});
+  } catch (err) {
+    return {ok: false, error: err instanceof Error ? err.message : 'خطا در ذخیره فایل'};
+  }
+}
+
+export async function pickJsonFileNative(): Promise<{
+  ok: boolean;
+  name?: string;
+  content?: string;
+  cancelled?: boolean;
+  error?: string;
+}> {
+  if (!isNativeAndroid()) return {ok: false};
+  try {
+    return await RoozhayeNative.pickJsonFileNative();
+  } catch (err) {
+    return {ok: false, error: err instanceof Error ? err.message : 'خطا در باز کردن فایل'};
+  }
+}
+
 export async function setNativeKeepAliveService(enabled: boolean): Promise<boolean> {
   if (!isNativeAndroid()) return false;
   try {
@@ -236,6 +309,7 @@ export async function syncSchedulesToNative(
       enabled: s.enabled,
       days: s.days,
       voiceGender: getVoiceGender(s.voiceName),
+      voiceName: s.voiceName,
       spokenText: resolveText(s),
       autoOpen: autoOpenMorning && s.topic === 'morning',
     }));

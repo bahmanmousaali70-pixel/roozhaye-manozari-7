@@ -140,29 +140,32 @@ export const CallerAnnouncerView: React.FC<CallerAnnouncerViewProps> = ({
     let readyCount = 0;
     try {
       for (const caller of callers) {
-        const singleScript = buildSpokenScript(caller.name, caller.template);
-        const clipId = hashTextKey(singleScript, caller.voiceName);
-        let buffer = await getAudioClipBuffer(clipId);
-        if (!buffer) {
-          const res = await generateAndCacheGeminiWav({
-            clipId,
-            text: singleScript,
-            title: `تماس: ${caller.name}`,
-            category: 'caller',
-            voiceName: caller.voiceName,
-            style: 'Clear fluent Tehran Persian and crisp English pronunciation announcer.',
-          });
-          if ('buffer' in res) {
-            buffer = res.buffer;
+        const displayVariants = caller.persianPhonetic?.trim()
+          ? Array.from(new Set([caller.name, caller.persianPhonetic.trim()]))
+          : [caller.name];
+        for (const variantName of displayVariants) {
+          const singleScript = buildSpokenScript(variantName, caller.template);
+          const clipId = hashTextKey(singleScript, caller.voiceName);
+          let buffer = await getAudioClipBuffer(clipId);
+          if (!buffer) {
+            const res = await generateAndCacheGeminiWav({
+              clipId,
+              text: singleScript,
+              title: `تماس: ${caller.name}`,
+              category: 'caller',
+              voiceName: caller.voiceName,
+              style: 'Clear fluent Tehran Persian announcer.',
+            });
+            if ('buffer' in res) {
+              buffer = res.buffer;
+            }
+            await new Promise((r) => setTimeout(r, 700));
           }
-          await new Promise((r) => setTimeout(r, 900));
-        }
-        if (buffer) {
-          if (isNativeAndroid()) {
+          if (buffer && isNativeAndroid()) {
             await precacheNativeWav(singleScript, caller.voiceName, buffer);
           }
-          readyCount++;
         }
+        readyCount++;
       }
       await onRefreshClips();
       onStatusToast(

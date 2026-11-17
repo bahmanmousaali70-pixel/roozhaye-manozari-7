@@ -15,6 +15,7 @@ import {
   Play,
   Plus,
   Radio,
+  Share2,
   ShieldCheck,
   Smartphone,
   Sun,
@@ -26,6 +27,9 @@ import {usePWAInstall} from '../hooks/usePWAInstall';
 import {getCloudApiBaseUrl, setCloudApiBaseUrl} from '../services/apiConfig';
 import type {CoupleSpaceInfo} from '../services/coupleSyncService';
 import {
+  isNativeAndroid,
+  pickJsonFileNative,
+  saveBackupJsonNative,
   syncServerBaseUrlToNative,
   type NativeCapabilities,
 } from '../services/nativeAndroidBridge';
@@ -78,6 +82,7 @@ interface SyncSettingsViewProps {
   onRequestNativePermissions: () => Promise<void>;
   onOpenNotificationListenerSettings: () => Promise<void>;
   onOpenAppInfoSettings: () => Promise<void>;
+  onOpenXiaomiOtherPermissions: () => Promise<void>;
   onStatusToast: (msg: string) => void;
 }
 
@@ -129,6 +134,7 @@ export const SyncSettingsView: React.FC<SyncSettingsViewProps> = ({
   onRequestNativePermissions,
   onOpenNotificationListenerSettings,
   onOpenAppInfoSettings,
+  onOpenXiaomiOtherPermissions,
   onStatusToast,
 }) => {
   const {isInstallable, isInstalled, isIOS, install} = usePWAInstall();
@@ -165,17 +171,51 @@ export const SyncSettingsView: React.FC<SyncSettingsViewProps> = ({
     2
   );
 
-  const handleDownloadJson = () => {
+  const handleDownloadJson = async (shareAfter = false) => {
+    const filename = `man-o-zari-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    if (isNativeAndroid()) {
+      const res = await saveBackupJsonNative(filename, exportPayload, shareAfter);
+      if (res.ok) {
+        onStatusToast(
+          shareAfter
+            ? `فایل پشتیبان (${filename}) ذخیره و پنجره اشتراک‌گذاری باز شد.`
+            : `فایل پشتیبان با نام ${filename} در پوشه Download/RoozhayeManOZari ذخیره شد.`
+        );
+      } else {
+        onStatusToast(res.error || 'خطا در ذخیره فایل پشتیبان؛ از «کپی کد پشتیبان» نیز می‌توانید استفاده کنید.');
+      }
+      return;
+    }
+
     const blob = new Blob([exportPayload], {type: 'application/json'});
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `man-o-zari-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    a.download = filename;
     document.body.appendChild(a);
     a.click();
     a.remove();
     URL.revokeObjectURL(url);
     onStatusToast('فایل پشتیبان با موفقیت دانلود شد.');
+  };
+
+  const handleNativePickJson = async () => {
+    const res = await pickJsonFileNative();
+    if (res.cancelled) return;
+    if (!res.ok || !res.content) {
+      onStatusToast(res.error || 'امکان خواندن فایل انتخاب‌شده نبود.');
+      return;
+    }
+    try {
+      const parsed = JSON.parse(res.content);
+      if (!parsed || typeof parsed !== 'object') {
+        throw new Error('فرمت نامعتبر است');
+      }
+      onImportBundle(parsed);
+      onStatusToast(`فایل پشتیبان «${res.name || 'backup.json'}» با موفقیت بارگذاری و ادغام شد.`);
+    } catch {
+      onStatusToast('فایل انتخاب‌شده JSON معتبر روزهای من و زری نیست.');
+    }
   };
 
   const handleCopyCode = async () => {
@@ -471,6 +511,13 @@ export const SyncSettingsView: React.FC<SyncSettingsViewProps> = ({
                   className="min-h-[44px] px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-emerald-900 bg-white dark:bg-[#0B1312] text-slate-700 dark:text-slate-200 text-xs font-semibold cursor-pointer"
                 >
                   باز کردن تنظیمات محدودشده برنامه
+                </button>
+                <button
+                  type="button"
+                  onClick={onOpenXiaomiOtherPermissions}
+                  className="min-h-[44px] px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-emerald-900 bg-white dark:bg-[#0B1312] text-slate-700 dark:text-slate-200 text-xs font-semibold cursor-pointer"
+                >
+                  مجوزهای دیگر شیائومی (پاپ‌آپ و پس‌زمینه)
                 </button>
               </>
             ) : isInstalled ? (
@@ -834,20 +881,23 @@ export const SyncSettingsView: React.FC<SyncSettingsViewProps> = ({
           </button>
         </form>
 
-        {/* Xiaomi Mi 10T Pro (MIUI 14) & POCO X6 Pro (HyperOS) Background Checklist */}
+        {/* Xiaomi Mi 10T Pro (MIUI 14) & POCO X6 Pro (HyperOS 3 / Android 16) Background Checklist */}
         <div className="rounded-xl bg-amber-50/70 dark:bg-amber-950/25 border border-amber-200/80 dark:border-amber-900/50 p-4 sm:p-5 space-y-2.5">
           <div className="text-xs sm:text-sm font-bold text-amber-950 dark:text-amber-200">
-            تنظیمات ضروری در شیائومی Mi 10T Pro (MIUI 14) و POCO X6 Pro (HyperOS / اندروید ۱۴ و ۱۵)
+            راهنمای گام‌به‌گام برای POCO X6 Pro (HyperOS 3 / اندروید ۱۶) و Mi 10T Pro (MIUI 14)
           </div>
           <ol className="list-decimal list-inside space-y-1.5 text-xs leading-6 text-amber-900 dark:text-amber-100/90">
             <li>
-              <strong>باز کردن تنظیمات محدودشده (برای POCO X6 Pro و اندروید ۱۴/۱۵):</strong> روی دکمه «باز کردن تنظیمات محدودشده برنامه» بزنید، سه‌نقطه بالای صفحه (⋮) را لمس کنید و گزینه <strong>Allow restricted settings (مجاز کردن تنظیمات محدودشده)</strong> را بزنید تا دسترسی پیامک و اعلان باز شود.
+              <strong>باز کردن قفل تنظیمات محدودشده در POCO X6 Pro (اندروید ۱۶ / HyperOS 3):</strong> دکمه <em>«باز کردن تنظیمات محدودشده برنامه»</em> را بزنید، آیکون <strong>سه‌نقطه بالای صفحه (⋮)</strong> را لمس کنید و گزینه <strong>Allow restricted settings (مجاز کردن تنظیمات محدودشده)</strong> را تایید کنید. سپس وارد بخش <strong>Permissions (مجوزها)</strong> شوید و <strong>SMS</strong> و <strong>Phone</strong> و <strong>Contacts</strong> را روی <em>Allow</em> بگذارید.
             </li>
             <li>
-              <strong>خواندن پیامک‌های Google Messages و RCS:</strong> روی دکمه <strong>«فعال‌سازی خواندن پیامک و RCS (اعلان‌ها)»</strong> بزنید و «روزهای من و زری» را روشن کنید تا حتی پیام‌های چت اینترنتی/RCS با صدای روان فارسی خوانده شوند.
+              <strong>مجوزهای مخفی شیائومی (خیلی مهم در HyperOS 3):</strong> دکمه <em>«مجوزهای دیگر شیائومی (پاپ‌آپ و پس‌زمینه)»</em> را بزنید و هر دو گزینه <strong>Display pop-up windows while running in the background</strong> و <strong>Show on Lock screen</strong> و <strong>Service SMS</strong> را سبز (Always allow) کنید.
             </li>
             <li>
-              <strong>صرفه‌جویی باتری و شروع خودکار:</strong> در تنظیمات برنامه، صرفه‌جویی باتری را روی <strong>«بدون محدودیت / No restrictions»</strong> بگذارید، <strong>شروع خودکار (Autostart)</strong> را روشن کنید و کلید «روشن کردن اجرا در پس‌زمینه» را فعال نمایید.
+              <strong>خواندن پیامک‌های Google Messages و RCS:</strong> روی دکمه <strong>«فعال‌سازی خواندن پیامک و RCS (اعلان‌ها)»</strong> بزنید و «روزهای من و زری» را روشن کنید تا علاوه بر پیامک معمولی، چت‌های RCS هم با صدای روان فارسی خوانده شوند.
+            </li>
+            <li>
+              <strong>باتری بدون محدودیت و شروع خودکار:</strong> صرفه‌جویی باتری را روی <strong>No restrictions (بدون محدودیت)</strong> بگذارید، <strong>Autostart</strong> را فعال کنید و کلید «روشن کردن اجرا در پس‌زمینه» را روشن نگه دارید.
             </li>
           </ol>
         </div>
@@ -947,12 +997,23 @@ export const SyncSettingsView: React.FC<SyncSettingsViewProps> = ({
           <div className="flex flex-wrap items-center gap-3">
             <button
               type="button"
-              onClick={handleDownloadJson}
+              onClick={() => handleDownloadJson(false)}
               className="min-h-[44px] px-4 py-2.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs sm:text-sm font-semibold flex items-center gap-2 cursor-pointer"
             >
               <Download className="w-4 h-4" />
-              <span>دانلود فایل پشتیبان (JSON)</span>
+              <span>ذخیره فایل پشتیبان (JSON)</span>
             </button>
+
+            {nativeCaps.isNative && (
+              <button
+                type="button"
+                onClick={() => handleDownloadJson(true)}
+                className="min-h-[44px] px-4 py-2.5 rounded-xl bg-slate-900 dark:bg-emerald-800 hover:bg-slate-800 text-white text-xs sm:text-sm font-semibold flex items-center gap-2 cursor-pointer"
+              >
+                <Share2 className="w-4 h-4" />
+                <span>اشتراک‌گذاری مستقیم فایل</span>
+              </button>
+            )}
 
             <button
               type="button"
@@ -963,11 +1024,22 @@ export const SyncSettingsView: React.FC<SyncSettingsViewProps> = ({
               <span>کپی کد پشتیبان</span>
             </button>
 
-            <label className="min-h-[44px] px-4 py-2.5 rounded-xl border border-slate-200 dark:border-emerald-900 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-emerald-950/40 text-xs sm:text-sm font-medium flex items-center gap-2 cursor-pointer">
-              <Upload className="w-4 h-4" />
-              <span>بارگذاری فایل پشتیبان</span>
-              <input type="file" accept=".json,application/json" onChange={handleFileUpload} className="hidden" />
-            </label>
+            {nativeCaps.isNative ? (
+              <button
+                type="button"
+                onClick={handleNativePickJson}
+                className="min-h-[44px] px-4 py-2.5 rounded-xl border border-slate-200 dark:border-emerald-900 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-emerald-950/40 text-xs sm:text-sm font-medium flex items-center gap-2 cursor-pointer"
+              >
+                <Upload className="w-4 h-4" />
+                <span>بارگذاری فایل پشتیبان</span>
+              </button>
+            ) : (
+              <label className="min-h-[44px] px-4 py-2.5 rounded-xl border border-slate-200 dark:border-emerald-900 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-emerald-950/40 text-xs sm:text-sm font-medium flex items-center gap-2 cursor-pointer">
+                <Upload className="w-4 h-4" />
+                <span>بارگذاری فایل پشتیبان</span>
+                <input type="file" accept="*/*" onChange={handleFileUpload} className="hidden" />
+              </label>
+            )}
           </div>
 
           <form onSubmit={handleImportSubmit} className="pt-4 border-t border-slate-100 dark:border-emerald-950/60 space-y-3">
