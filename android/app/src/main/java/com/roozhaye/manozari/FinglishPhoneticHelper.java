@@ -236,6 +236,9 @@ public class FinglishPhoneticHelper {
         } catch (Exception ignored) {
         }
 
+        if (trimmed.matches("(?s).*[A-Za-z].*")) {
+            return transliterateToPersianPhonetic(trimmed);
+        }
         return trimmed;
     }
 

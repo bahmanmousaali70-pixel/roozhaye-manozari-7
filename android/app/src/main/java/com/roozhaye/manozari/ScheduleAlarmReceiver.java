@@ -50,16 +50,17 @@ public class ScheduleAlarmReceiver extends BroadcastReceiver {
             String firedKey = "fired_today_" + safeId;
             long now = System.currentTimeMillis();
             long lastFiredMs = prefs.getLong("fired_ms_" + todayKey + "_" + safeId, 0L);
+            boolean alreadyFiredToday = todayKey.equals(prefs.getString(firedKey, ""));
 
-            // Prevent duplicate alarm execution if OS re-delivers alarm quickly
-            if (now - lastFiredMs < 45000L) {
+            // Prevent duplicate alarm execution (whether OS re-delivered OR WebView already played today)
+            if (alreadyFiredToday || (now - lastFiredMs < 45000L)) {
                 ScheduleAlarmHelper.rescheduleAll(context);
                 return;
             }
             prefs.edit()
                     .putString(firedKey, todayKey)
                     .putLong("fired_ms_" + todayKey + "_" + safeId, now)
-                    .apply();
+                    .commit();
 
             postHighPriorityNotification(
                     context,

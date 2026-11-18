@@ -28,7 +28,9 @@ import {getCloudApiBaseUrl, setCloudApiBaseUrl} from '../services/apiConfig';
 import type {CoupleSpaceInfo} from '../services/coupleSyncService';
 import {
   isNativeAndroid,
+  openBatteryAndAutostartSettingsNative,
   pickJsonFileNative,
+  requestSmsPermissionsOnlyNative,
   saveBackupJsonNative,
   syncServerBaseUrlToNative,
   type NativeCapabilities,
@@ -519,6 +521,13 @@ export const SyncSettingsView: React.FC<SyncSettingsViewProps> = ({
                 >
                   مجوزهای دیگر شیائومی (پاپ‌آپ و پس‌زمینه)
                 </button>
+                <button
+                  type="button"
+                  onClick={() => openBatteryAndAutostartSettingsNative()}
+                  className="min-h-[44px] px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-emerald-900 bg-white dark:bg-[#0B1312] text-slate-700 dark:text-slate-200 text-xs font-semibold cursor-pointer"
+                >
+                  باتری بدون محدودیت و Autostart
+                </button>
               </>
             ) : isInstalled ? (
               <div className="min-h-[44px] px-4 py-2.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300 text-xs sm:text-sm font-semibold flex items-center gap-2">
@@ -543,6 +552,68 @@ export const SyncSettingsView: React.FC<SyncSettingsViewProps> = ({
             )}
           </div>
         </div>
+
+        {/* Dedicated 3-Step Restricted Settings Unlock Wizard for Android 13-16 / HyperOS 3 (POCO X6 Pro) */}
+        {nativeCaps.isNative && (!nativeCaps.sms || !nativeCaps.notificationListener) && (
+          <div className="rounded-xl bg-amber-50 dark:bg-amber-950/35 border border-amber-300 dark:border-amber-800 p-4 sm:p-5 space-y-3">
+            <div className="text-xs sm:text-sm font-extrabold text-amber-950 dark:text-amber-200">
+              رفع قفل «تنظیمات محدودشده / Restricted setting» برای خواندن پیامک در گوشی زری (اندروید ۱۳ تا ۱۶)
+            </div>
+            <p className="text-xs leading-6 text-amber-900 dark:text-amber-100/90">
+              چون برنامه از بیرون گوگل‌پلی نصب شده، اندروید ابتدا اجازه پیامک و اعلان را قفل می‌کند و لینک راهنمای گوگل را نشان می‌دهد. با این ۳ قدم ساده قفل آن برای همیشه باز می‌شود:
+            </p>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5">
+              <div className="rounded-xl bg-white/80 dark:bg-[#0B1312] border border-amber-200/80 dark:border-amber-900 p-3 space-y-2 flex flex-col justify-between">
+                <div className="text-xs leading-5 text-slate-700 dark:text-slate-200">
+                  <strong>قدم ۱ (ظاهر شدن دکمه قفل):</strong> دکمه زیر را بزنید و کلید <em>روزهای من و زری</em> را لمس کنید؛ اگر پنجره «تنظیمات محدودشده» داد، تایید/برگشت بزنید. (تا این را یک‌بار نزنید، گزینه قدم ۲ مخفی است!)
+                </div>
+                <button
+                  type="button"
+                  onClick={onOpenNotificationListenerSettings}
+                  className="w-full min-h-[40px] px-3 rounded-lg bg-slate-900 dark:bg-emerald-700 text-white text-xs font-semibold cursor-pointer"
+                >
+                  ۱. باز کردن دسترسی اعلان پیامک
+                </button>
+              </div>
+
+              <div className="rounded-xl bg-white/80 dark:bg-[#0B1312] border border-amber-200/80 dark:border-amber-900 p-3 space-y-2 flex flex-col justify-between">
+                <div className="text-xs leading-5 text-slate-700 dark:text-slate-200">
+                  <strong>قدم ۲ (باز کردن قفل):</strong> در صفحه اطلاعات برنامه، یا صفحه را <strong>تا پایینِ پایین</strong> بکشید و <strong>اجازه به تنظیمات محدودشده</strong> را بزنید، یا <strong>سه‌نقطه بالای صفحه (⋮)</strong> ← <em>Allow restricted settings</em> را تایید کنید.
+                </div>
+                <button
+                  type="button"
+                  onClick={onOpenAppInfoSettings}
+                  className="w-full min-h-[40px] px-3 rounded-lg bg-amber-700 hover:bg-amber-800 text-white text-xs font-semibold cursor-pointer"
+                >
+                  ۲. باز کردن اطلاعات برنامه (رفع قفل)
+                </button>
+              </div>
+
+              <div className="rounded-xl bg-white/80 dark:bg-[#0B1312] border border-amber-200/80 dark:border-amber-900 p-3 space-y-2 flex flex-col justify-between">
+                <div className="text-xs leading-5 text-slate-700 dark:text-slate-200">
+                  <strong>قدم ۳ (روشن کردن نهایی):</strong> پس از باز کردن قفل، دوباره دکمه قدم ۱ را بزنید و کلید را روشن کنید؛ سپس دکمه زیر را بزنید تا مجوز SMS تایید شود.
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    void requestSmsPermissionsOnlyNative().then((caps) => {
+                      if (caps?.sms) {
+                        onStatusToast('مجوز خواندن پیامک (SMS) با موفقیت فعال شد.');
+                      } else if (caps) {
+                        onStatusToast(
+                          'اگر پنجره اجازه SMS باز نشد، قدم ۲ (باز کردن اطلاعات برنامه و اجازه تنظیمات محدودشده) را انجام دهید و در Permissions مجوز SMS را Allow کنید.'
+                        );
+                      }
+                    });
+                  }}
+                  className="w-full min-h-[40px] px-3 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold cursor-pointer"
+                >
+                  ۳. تایید نهایی مجوز پیامک (SMS)
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {nativeCaps.isNative && (
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2.5 pt-2">
@@ -888,7 +959,7 @@ export const SyncSettingsView: React.FC<SyncSettingsViewProps> = ({
           </div>
           <ol className="list-decimal list-inside space-y-1.5 text-xs leading-6 text-amber-900 dark:text-amber-100/90">
             <li>
-              <strong>باز کردن قفل تنظیمات محدودشده در POCO X6 Pro (اندروید ۱۶ / HyperOS 3):</strong> دکمه <em>«باز کردن تنظیمات محدودشده برنامه»</em> را بزنید، آیکون <strong>سه‌نقطه بالای صفحه (⋮)</strong> را لمس کنید و گزینه <strong>Allow restricted settings (مجاز کردن تنظیمات محدودشده)</strong> را تایید کنید. سپس وارد بخش <strong>Permissions (مجوزها)</strong> شوید و <strong>SMS</strong> و <strong>Phone</strong> و <strong>Contacts</strong> را روی <em>Allow</em> بگذارید.
+              <strong>باز کردن قفل تنظیمات محدودشده در POCO X6 Pro (اندروید ۱۶ / HyperOS 3):</strong> اول دکمه <em>«فعال‌سازی خواندن پیامک و RCS»</em> را بزنید و روی برنامه کلیک کنید تا پیام محدودیت نمایش داده شود؛ سپس دکمه <em>«باز کردن تنظیمات محدودشده برنامه»</em> را بزنید، صفحه را <strong>تا پایینِ پایین</strong> بکشید و <strong>اجازه به تنظیمات محدودشده</strong> را روشن کنید (یا آیکون <strong>سه‌نقطه بالای صفحه ⋮</strong> ← <em>Allow restricted settings</em> را تایید کنید).
             </li>
             <li>
               <strong>مجوزهای مخفی شیائومی (خیلی مهم در HyperOS 3):</strong> دکمه <em>«مجوزهای دیگر شیائومی (پاپ‌آپ و پس‌زمینه)»</em> را بزنید و هر دو گزینه <strong>Display pop-up windows while running in the background</strong> و <strong>Show on Lock screen</strong> و <strong>Service SMS</strong> را سبز (Always allow) کنید.

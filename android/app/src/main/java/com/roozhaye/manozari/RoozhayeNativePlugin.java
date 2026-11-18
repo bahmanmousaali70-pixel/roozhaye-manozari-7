@@ -60,6 +60,44 @@ public class RoozhayeNativePlugin extends Plugin {
     @PluginMethod
     public void requestPermissionsAndMiuiSetup(PluginCall call) {
         Context ctx = getContext();
+        List<String> needed = collectMissingRuntimePermissions(ctx);
+
+        if (!needed.isEmpty() && getActivity() != null) {
+            // Request Android runtime permissions first WITHOUT launching Settings on top,
+            // otherwise Android auto-dismisses the permission dialog behind Settings!
+            ActivityCompat.requestPermissions(getActivity(), needed.toArray(new String[0]), PERM_REQ_CODE);
+            call.resolve(buildCapsObject());
+            return;
+        }
+
+        // All runtime permissions are already granted -> guide battery optimization / overlay / autostart
+        openNextBackgroundSetting(ctx);
+        call.resolve(buildCapsObject());
+    }
+
+    @PluginMethod
+    public void requestSmsPermissionsOnly(PluginCall call) {
+        Context ctx = getContext();
+        List<String> smsPerms = new ArrayList<>();
+        if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.RECEIVE_SMS) != PackageManager.PERMISSION_GRANTED) {
+            smsPerms.add(Manifest.permission.RECEIVE_SMS);
+        }
+        if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.READ_SMS) != PackageManager.PERMISSION_GRANTED) {
+            smsPerms.add(Manifest.permission.READ_SMS);
+        }
+        if (!smsPerms.isEmpty() && getActivity() != null) {
+            ActivityCompat.requestPermissions(getActivity(), smsPerms.toArray(new String[0]), PERM_REQ_CODE + 1);
+        }
+        call.resolve(buildCapsObject());
+    }
+
+    @PluginMethod
+    public void openBatteryAndAutostartSettings(PluginCall call) {
+        openNextBackgroundSetting(getContext());
+        call.resolve(buildCapsObject());
+    }
+
+    private List<String> collectMissingRuntimePermissions(Context ctx) {
         List<String> needed = new ArrayList<>();
         if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.READ_PHONE_STATE) != PackageManager.PERMISSION_GRANTED) {
             needed.add(Manifest.permission.READ_PHONE_STATE);
@@ -81,12 +119,10 @@ public class RoozhayeNativePlugin extends Plugin {
                 needed.add(Manifest.permission.POST_NOTIFICATIONS);
             }
         }
+        return needed;
+    }
 
-        if (!needed.isEmpty() && getActivity() != null) {
-            ActivityCompat.requestPermissions(getActivity(), needed.toArray(new String[0]), PERM_REQ_CODE);
-        }
-
-        // Request battery optimization exemption (critical for MIUI / HyperOS)
+    private void openNextBackgroundSetting(Context ctx) {
         try {
             PowerManager pm = (PowerManager) ctx.getSystemService(Context.POWER_SERVICE);
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && pm != null && !pm.isIgnoringBatteryOptimizations(ctx.getPackageName())) {
@@ -107,21 +143,34 @@ public class RoozhayeNativePlugin extends Plugin {
         } catch (Exception ignored) {
             openMiuiAutostartIfAvailable(ctx);
         }
-
-        call.resolve(buildCapsObject());
     }
 
     @PluginMethod
     public void openNotificationListenerSettings(PluginCall call) {
         Context ctx = getContext();
-        boolean launched;
-        try {
-            Intent intent = new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS);
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            ctx.startActivity(intent);
-            launched = true;
-        } catch (Exception ignored) {
-            launched = openAppDetailsInternal(ctx);
+        boolean launched = false;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            try {
+                Intent detailIntent = new Intent(Settings.ACTION_NOTIFICATION_LISTENER_DETAIL_SETTINGS);
+                detailIntent.putExtra(
+                        Settings.EXTRA_NOTIFICATION_LISTENER_COMPONENT_NAME,
+                        new ComponentName(ctx, NotificationSmsListenerService.class).flattenToString()
+                );
+                detailIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                ctx.startActivity(detailIntent);
+                launched = true;
+            } catch (Exception ignored) {
+            }
+        }
+        if (!launched) {
+            try {
+                Intent intent = new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS);
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                ctx.startActivity(intent);
+                launched = true;
+            } catch (Exception ignored) {
+                launched = openAppDetailsInternal(ctx);
+            }
         }
         JSObject ret = new JSObject();
         ret.put("ok", launched);
@@ -398,6 +447,22 @@ public class RoozhayeNativePlugin extends Plugin {
         }
         JSObject ret = new JSObject();
         ret.put("fired", fired);
+        call.resolve(ret);
+    }
+
+    @PluginMethod
+    public void markScheduleFiredNatively(PluginCall call) {
+        String scheduleId = call.getString("scheduleId", "");
+        String todayKey = call.getString("todayKey", "");
+        if (scheduleId != null && !scheduleId.isEmpty() && todayKey != null && !todayKey.isEmpty()) {
+            SharedPreferences prefs = getContext().getSharedPreferences("rmz_native_prefs", Context.MODE_PRIVATE);
+            prefs.edit()
+                    .putString("fired_today_" + scheduleId, todayKey)
+                    .putLong("fired_ms_" + todayKey + "_" + scheduleId, System.currentTimeMillis())
+                    .commit();
+        }
+        JSObject ret = new JSObject();
+        ret.put("ok", true);
         call.resolve(ret);
     }
 

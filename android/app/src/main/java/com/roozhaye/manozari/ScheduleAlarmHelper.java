@@ -11,6 +11,8 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.util.Calendar;
+import java.util.HashSet;
+import java.util.Set;
 
 public class ScheduleAlarmHelper {
     public static void rescheduleAll(Context context) {
@@ -20,6 +22,29 @@ public class ScheduleAlarmHelper {
         SharedPreferences prefs = context.getSharedPreferences("rmz_native_prefs", Context.MODE_PRIVATE);
         String jsonStr = prefs.getString("schedules_json", "[]");
 
+        // Cancel any previously scheduled request codes (prevents ghost alarms after edit/delete/cloud sync)
+        Set<String> prevCodes = prefs.getStringSet("scheduled_req_codes", new HashSet<>());
+        if (prevCodes != null) {
+            for (String codeStr : prevCodes) {
+                try {
+                    int oldCode = Integer.parseInt(codeStr);
+                    Intent cancelIntent = new Intent(context, ScheduleAlarmReceiver.class);
+                    PendingIntent oldPi = PendingIntent.getBroadcast(
+                            context,
+                            oldCode,
+                            cancelIntent,
+                            PendingIntent.FLAG_NO_CREATE | PendingIntent.FLAG_IMMUTABLE
+                    );
+                    if (oldPi != null) {
+                        alarmManager.cancel(oldPi);
+                        oldPi.cancel();
+                    }
+                } catch (Exception ignored) {
+                }
+            }
+        }
+
+        Set<String> activeCodes = new HashSet<>();
         try {
             JSONArray arr = new JSONArray(jsonStr);
             for (int i = 0; i < arr.length(); i++) {
@@ -46,6 +71,8 @@ public class ScheduleAlarmHelper {
 
                 alarmManager.cancel(pi);
                 if (!enabled) continue;
+
+                activeCodes.add(String.valueOf(reqCode));
 
                 String time = item.optString("time", "08:00");
                 String[] parts = time.split(":");
@@ -75,6 +102,7 @@ public class ScheduleAlarmHelper {
                     alarmManager.setExact(AlarmManager.RTC_WAKEUP, triggerAt, pi);
                 }
             }
+            prefs.edit().putStringSet("scheduled_req_codes", activeCodes).apply();
         } catch (Exception ignored) {
         }
     }

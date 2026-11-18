@@ -536,6 +536,7 @@ export default function App() {
 
   const handleTriggerSchedule = useCallback(
     async (schedule: ScheduledAnnouncement, isManualTest = false) => {
+      stopAllSpeech();
       if (isManualTest) {
         unlockAudioPlayback();
       }

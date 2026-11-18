@@ -34,6 +34,7 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.util.concurrent.atomic.AtomicLong;
 
 public class CallAnnouncerService extends Service {
     public static final String CHANNEL_ID = "rmz_call_announcer_channel";
@@ -92,8 +93,9 @@ public class CallAnnouncerService extends Service {
     }
 
     private static volatile MediaPlayer activeDirectPlayer = null;
+    private static final AtomicLong GLOBAL_PLAY_GEN = new AtomicLong(0);
 
-    public static void stopActive(Context context) {
+    private static void stopDirectPlayerOnly() {
         if (activeDirectPlayer != null) {
             try {
                 if (activeDirectPlayer.isPlaying()) activeDirectPlayer.stop();
@@ -105,6 +107,12 @@ public class CallAnnouncerService extends Service {
             }
             activeDirectPlayer = null;
         }
+    }
+
+    public static void stopActive(Context context) {
+        GLOBAL_PLAY_GEN.incrementAndGet();
+        stopDirectPlayerOnly();
+        BilingualSpeechHelper.stopActiveTts();
         try {
             context.stopService(new Intent(context, CallAnnouncerService.class));
         } catch (Exception ignored) {
@@ -153,6 +161,10 @@ public class CallAnnouncerService extends Service {
         final String text = rawText != null ? rawText.trim() : "";
         if (text.isEmpty()) return;
 
+        final long myGen = GLOBAL_PLAY_GEN.incrementAndGet();
+        stopDirectPlayerOnly();
+        BilingualSpeechHelper.stopActiveTts();
+
         new Thread(() -> {
             PowerManager.WakeLock localLock = null;
             try {
@@ -163,7 +175,9 @@ public class CallAnnouncerService extends Service {
                     localLock.acquire(25000L);
                 }
                 Thread.sleep(isCall ? 220L : 100L);
+                if (myGen != GLOBAL_PLAY_GEN.get()) return;
                 File audioFile = fetchOrGetCachedAudioStatic(appCtx, text, voiceName);
+                if (myGen != GLOBAL_PLAY_GEN.get()) return;
                 if (audioFile != null && audioFile.exists() && audioFile.length() > 44) {
                     final MediaPlayer mp = new MediaPlayer();
                     AudioAttributes attrs = new AudioAttributes.Builder()
@@ -173,12 +187,21 @@ public class CallAnnouncerService extends Service {
                     mp.setAudioAttributes(attrs);
                     mp.setDataSource(audioFile.getAbsolutePath());
                     mp.prepare();
+                    if (myGen != GLOBAL_PLAY_GEN.get()) {
+                        try {
+                            mp.release();
+                        } catch (Exception ignored) {
+                        }
+                        return;
+                    }
+                    stopDirectPlayerOnly();
+                    BilingualSpeechHelper.stopActiveTts();
                     activeDirectPlayer = mp;
                     final PowerManager.WakeLock lockToRelease = localLock;
                     final int[] remaining = {Math.max(1, Math.min(2, repeatCount))};
                     mp.setOnCompletionListener(player -> {
                         remaining[0]--;
-                        if (remaining[0] > 0) {
+                        if (remaining[0] > 0 && myGen == GLOBAL_PLAY_GEN.get()) {
                             try {
                                 player.seekTo(0);
                                 player.start();
@@ -220,10 +243,12 @@ public class CallAnnouncerService extends Service {
                 } catch (Exception ignored) {
                 }
             }
+            if (myGen != GLOBAL_PLAY_GEN.get()) return;
             new Handler(Looper.getMainLooper()).post(() -> {
+                if (myGen != GLOBAL_PLAY_GEN.get()) return;
                 String spoken = repeatCount == 2 ? (text + " . " + text) : text;
                 BilingualSpeechHelper.speak(appCtx, spoken, isMale, 1.0f, false, success -> {
-                    if (!success) {
+                    if (!success && myGen == GLOBAL_PLAY_GEN.get()) {
                         postDirectFallbackNotification(appCtx, title, text);
                     }
                 });
@@ -249,8 +274,11 @@ public class CallAnnouncerService extends Service {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         final int sessionId = ++activeSessionId;
+        final long myGen = GLOBAL_PLAY_GEN.incrementAndGet();
         cancelled = false;
         stopActivePlayer();
+        stopDirectPlayerOnly();
+        BilingualSpeechHelper.stopActiveTts();
         abandonAudioFocus();
         handler.removeCallbacksAndMessages(null);
 
@@ -291,8 +319,8 @@ public class CallAnnouncerService extends Service {
                 : (isMale ? "Charon" : "Kore");
 
         handler.postDelayed(() -> {
-            if (cancelled || sessionId != activeSessionId) return;
-            new Thread(() -> playOnlineOrFallback(sessionId, title, text, voiceName, isMale, repeat, isCall)).start();
+            if (cancelled || sessionId != activeSessionId || myGen != GLOBAL_PLAY_GEN.get()) return;
+            new Thread(() -> playOnlineOrFallback(sessionId, myGen, title, text, voiceName, isMale, repeat, isCall)).start();
         }, isCall ? 250 : 120);
 
         // Safety stop after 55s
@@ -304,24 +332,26 @@ public class CallAnnouncerService extends Service {
         return START_NOT_STICKY;
     }
 
-    private void playOnlineOrFallback(int sessionId, String title, String singleText, String voiceName, boolean isMale, int repeat, boolean isCall) {
-        if (cancelled || sessionId != activeSessionId) return;
+    private void playOnlineOrFallback(int sessionId, long myGen, String title, String singleText, String voiceName, boolean isMale, int repeat, boolean isCall) {
+        if (cancelled || sessionId != activeSessionId || myGen != GLOBAL_PLAY_GEN.get()) return;
 
         File wavFile = fetchOrGetCachedWav(singleText, voiceName);
-        if (cancelled || sessionId != activeSessionId) return;
+        if (cancelled || sessionId != activeSessionId || myGen != GLOBAL_PLAY_GEN.get()) return;
 
         if (wavFile != null && wavFile.exists() && wavFile.length() > 44) {
             handler.post(() -> {
-                if (cancelled || sessionId != activeSessionId) return;
+                if (cancelled || sessionId != activeSessionId || myGen != GLOBAL_PLAY_GEN.get()) return;
                 if (!playWavFile(sessionId, wavFile, repeat)) {
-                    fallbackOfflineSpeak(sessionId, title, singleText, isMale, repeat, isCall);
+                    if (myGen == GLOBAL_PLAY_GEN.get()) {
+                        fallbackOfflineSpeak(sessionId, title, singleText, isMale, repeat, isCall);
+                    }
                 }
             });
             return;
         }
 
         handler.post(() -> {
-            if (!cancelled && sessionId == activeSessionId) {
+            if (!cancelled && sessionId == activeSessionId && myGen == GLOBAL_PLAY_GEN.get()) {
                 fallbackOfflineSpeak(sessionId, title, singleText, isMale, repeat, isCall);
             }
         });

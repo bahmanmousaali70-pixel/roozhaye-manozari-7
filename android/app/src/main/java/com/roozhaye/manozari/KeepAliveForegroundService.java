@@ -186,23 +186,25 @@ public class KeepAliveForegroundService extends Service {
 
     private String resolveContactDisplay(String phoneNumber) {
         if (phoneNumber == null || phoneNumber.trim().isEmpty()) return null;
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED) {
-            return null;
-        }
-        Uri uri = Uri.withAppendedPath(ContactsContract.PhoneLookup.CONTENT_FILTER_URI, Uri.encode(phoneNumber));
-        try (Cursor cursor = getContentResolver().query(
-                uri,
-                new String[]{ContactsContract.PhoneLookup.DISPLAY_NAME},
-                null,
-                null,
-                null
-        )) {
-            if (cursor != null && cursor.moveToFirst()) {
-                return cursor.getString(0);
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED) {
+            Uri uri = Uri.withAppendedPath(ContactsContract.PhoneLookup.CONTENT_FILTER_URI, Uri.encode(phoneNumber));
+            try (Cursor cursor = getContentResolver().query(
+                    uri,
+                    new String[]{ContactsContract.PhoneLookup.DISPLAY_NAME},
+                    null,
+                    null,
+                    null
+            )) {
+                if (cursor != null && cursor.moveToFirst()) {
+                    String found = cursor.getString(0);
+                    if (found != null && !found.trim().isEmpty()) {
+                        return found;
+                    }
+                }
+            } catch (Exception ignored) {
             }
-        } catch (Exception ignored) {
         }
-        return null;
+        return FinglishPhoneticHelper.resolvePhoneToSyncedName(this, phoneNumber);
     }
 
     @Override

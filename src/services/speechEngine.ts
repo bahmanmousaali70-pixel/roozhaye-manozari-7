@@ -425,7 +425,7 @@ export async function speakFluentPersian(options: SpeakOptions): Promise<'cache'
       if (cached) {
         options.onStart?.('cache');
         await playWavBuffer(cached, rate, token);
-        options.onEnd?.();
+        if (token === playbackToken) options.onEnd?.();
         return 'cache';
       }
     }
@@ -446,7 +446,7 @@ export async function speakFluentPersian(options: SpeakOptions): Promise<'cache'
         if ('buffer' in result) {
           options.onStart?.('gemini');
           await playWavBuffer(result.buffer, rate, token);
-          options.onEnd?.();
+          if (token === playbackToken) options.onEnd?.();
           return 'gemini';
         }
       } catch (err) {
@@ -461,9 +461,11 @@ export async function speakFluentPersian(options: SpeakOptions): Promise<'cache'
     let ok = false;
     if (isNativeAndroid()) {
       ok = await speakNativeBilingual(options.text, persona.gender, rate);
+      if (token !== playbackToken) return 'offline-speech';
     }
     if (!ok) {
       ok = await speakOfflineBilingual(options.text, rate, persona.gender, token);
+      if (token !== playbackToken) return 'offline-speech';
     }
     options.onEnd?.();
     if (!ok) {

@@ -1,9 +1,14 @@
 import {useCallback, useEffect, useRef, useState} from 'react';
 import {getTodayKey} from '../data/persianLibrary';
-import {isNativeAndroid, wasScheduleFiredNatively} from '../services/nativeAndroidBridge';
+import {
+  isNativeAndroid,
+  markScheduleFiredNatively,
+  wasScheduleFiredNatively,
+} from '../services/nativeAndroidBridge';
 import type {ScheduledAnnouncement} from '../types/app';
 
 const dispatchedTodayKeys = new Set<string>();
+const LS_LOCK_PREFIX = 'rmz_sched_lock_v1_';
 
 function createSilentWavBlobUrl(): string {
   const sampleRate = 8000;
@@ -40,7 +45,7 @@ function matchesDayFilter(days: ScheduledAnnouncement['days'], date: Date): bool
 export function useBackgroundScheduler(params: {
   schedules: ScheduledAnnouncement[];
   keepAliveEnabled: boolean;
-  onTriggerSchedule: (schedule: ScheduledAnnouncement, isManualTest?: boolean) => void;
+  onTriggerSchedule: (schedule: ScheduledAnnouncement, isManualTest?: boolean) => void | Promise<void>;
   onMarkTriggered: (scheduleId: string, dateKey: string) => void;
   onStatusToast: (msg: string) => void;
 }) {
@@ -99,8 +104,9 @@ export function useBackgroundScheduler(params: {
   );
 
   // Manage silent MediaSession audio loop so mobile browsers keep JS timers alive in background
+  // (Inside Native Android APK, KeepAliveForegroundService handles background execution natively.)
   useEffect(() => {
-    if (!keepAliveEnabled) {
+    if (!keepAliveEnabled || isNativeAndroid()) {
       if (silentAudioRef.current) {
         silentAudioRef.current.pause();
         silentAudioRef.current = null;
@@ -194,20 +200,43 @@ export function useBackgroundScheduler(params: {
           const lockKey = `${item.id}::${todayKey}`;
           if (dispatchedTodayKeys.has(lockKey)) continue;
 
-          if (isNativeAndroid()) {
-            // Let native AlarmManager trigger first at :00..:04 without WebView collision
-            if (now.getSeconds() < 5) continue;
-            const firedNatively = await wasScheduleFiredNatively(item.id, todayKey);
-            if (firedNatively) {
+          try {
+            if (localStorage.getItem(`${LS_LOCK_PREFIX}${lockKey}`) === todayKey) {
               dispatchedTodayKeys.add(lockKey);
               onMarkTriggered(item.id, todayKey);
               continue;
             }
+          } catch {
+            // ignore storage errors
+          }
+
+          if (isNativeAndroid()) {
+            // Give Android AlarmManager (especially Android 12/MIUI inexact wakeups) 45 full seconds
+            // to deliver ScheduleAlarmReceiver before WebView ever attempts a fallback.
+            const firedNatively = await wasScheduleFiredNatively(item.id, todayKey);
+            if (firedNatively) {
+              dispatchedTodayKeys.add(lockKey);
+              try {
+                localStorage.setItem(`${LS_LOCK_PREFIX}${lockKey}`, todayKey);
+              } catch {
+                // ignore
+              }
+              onMarkTriggered(item.id, todayKey);
+              continue;
+            }
+            if (now.getSeconds() < 45) continue;
+            // Claim the native lock synchronously BEFORE WebView starts speaking so delayed OS alarms cannot overlap
+            await markScheduleFiredNatively(item.id, todayKey);
           }
 
           dispatchedTodayKeys.add(lockKey);
+          try {
+            localStorage.setItem(`${LS_LOCK_PREFIX}${lockKey}`, todayKey);
+          } catch {
+            // ignore
+          }
           onMarkTriggered(item.id, todayKey);
-          onTriggerSchedule(item, false);
+          await onTriggerSchedule(item, false);
         }
       } finally {
         isCheckingRef.current = false;

@@ -42,6 +42,8 @@ interface NativeCallerPayload {
 interface RoozhayeNativePlugin {
   getNativeCapabilities(): Promise<NativeCapabilities>;
   requestPermissionsAndMiuiSetup(): Promise<NativeCapabilities>;
+  requestSmsPermissionsOnly(): Promise<NativeCapabilities>;
+  openBatteryAndAutostartSettings(): Promise<NativeCapabilities>;
   openNotificationListenerSettings(): Promise<{ok: boolean}>;
   openAppInfoSettings(): Promise<{ok: boolean}>;
   openXiaomiOtherPermissions(): Promise<{ok: boolean}>;
@@ -58,6 +60,7 @@ interface RoozhayeNativePlugin {
   syncCallers(options: {callersJson: string}): Promise<{count: number}>;
   syncSchedules(options: {schedulesJson: string}): Promise<{count: number}>;
   wasScheduleFiredNatively(options: {scheduleId: string; todayKey: string}): Promise<{fired: boolean}>;
+  markScheduleFiredNatively(options: {scheduleId: string; todayKey: string}): Promise<{ok: boolean}>;
   stopNativeAudio(): Promise<{ok: boolean}>;
   saveBackupJson(options: {
     filename: string;
@@ -154,6 +157,24 @@ export async function requestNativePermissionsAndMiuiSetup(): Promise<NativeCapa
   }
 }
 
+export async function requestSmsPermissionsOnlyNative(): Promise<NativeCapabilities | null> {
+  if (!isNativeAndroid()) return null;
+  try {
+    return await RoozhayeNative.requestSmsPermissionsOnly();
+  } catch {
+    return null;
+  }
+}
+
+export async function openBatteryAndAutostartSettingsNative(): Promise<NativeCapabilities | null> {
+  if (!isNativeAndroid()) return null;
+  try {
+    return await RoozhayeNative.openBatteryAndAutostartSettings();
+  } catch {
+    return null;
+  }
+}
+
 export async function openNotificationListenerSettings(): Promise<boolean> {
   if (!isNativeAndroid()) return false;
   try {
@@ -191,6 +212,15 @@ export async function wasScheduleFiredNatively(scheduleId: string, todayKey: str
     return Boolean(res.fired);
   } catch {
     return false;
+  }
+}
+
+export async function markScheduleFiredNatively(scheduleId: string, todayKey: string): Promise<void> {
+  if (!isNativeAndroid()) return;
+  try {
+    await RoozhayeNative.markScheduleFiredNatively({scheduleId, todayKey});
+  } catch {
+    // ignore
   }
 }
 

@@ -59,13 +59,49 @@ public class BilingualSpeechHelper {
         void onComplete(boolean success);
     }
 
+    private static final Object TTS_LOCK = new Object();
+    private static TextToSpeech activeTts = null;
+
+    public static void stopActiveTts() {
+        synchronized (TTS_LOCK) {
+            if (activeTts != null) {
+                try {
+                    activeTts.stop();
+                } catch (Exception ignored) {
+                }
+                try {
+                    activeTts.shutdown();
+                } catch (Exception ignored) {
+                }
+                activeTts = null;
+            }
+        }
+    }
+
     public static void speak(Context context, String text, boolean isMale, float rate, boolean ringtoneStream, CompletionCallback callback) {
+        stopActiveTts();
         final TextToSpeech[] holder = new TextToSpeech[1];
         final AtomicBoolean settled = new AtomicBoolean(false);
 
-        holder[0] = new TextToSpeech(context.getApplicationContext(), status -> {
+        TextToSpeech created = new TextToSpeech(context.getApplicationContext(), status -> {
             TextToSpeech tts = holder[0];
+            synchronized (TTS_LOCK) {
+                if (activeTts != tts) {
+                    if (tts != null) {
+                        try {
+                            tts.shutdown();
+                        } catch (Exception ignored) {
+                        }
+                    }
+                    if (settled.compareAndSet(false, true) && callback != null) {
+                        callback.onComplete(false);
+                    }
+                    return;
+                }
+            }
+
             if (status != TextToSpeech.SUCCESS || tts == null) {
+                stopActiveTts();
                 if (settled.compareAndSet(false, true) && callback != null) {
                     callback.onComplete(false);
                 }
@@ -85,7 +121,7 @@ public class BilingualSpeechHelper {
 
                 // Prevent robotic English-only fragments (e.g., reading only "bahman mousaali" and skipping the Persian SMS body)
                 if (hasPersianChars && !hasPersianSupport) {
-                    tts.shutdown();
+                    stopActiveTts();
                     if (settled.compareAndSet(false, true) && callback != null) {
                         callback.onComplete(false);
                     }
@@ -108,7 +144,7 @@ public class BilingualSpeechHelper {
 
                 List<Segment> segments = splitBilingual(preparedText);
                 if (segments.isEmpty()) {
-                    tts.shutdown();
+                    stopActiveTts();
                     if (settled.compareAndSet(false, true) && callback != null) {
                         callback.onComplete(false);
                     }
@@ -125,7 +161,13 @@ public class BilingualSpeechHelper {
                     @Override
                     public void onDone(String utteranceId) {
                         if (lastUtteranceId.equals(utteranceId) && settled.compareAndSet(false, true)) {
-                            tts.shutdown();
+                            synchronized (TTS_LOCK) {
+                                if (activeTts == tts) activeTts = null;
+                            }
+                            try {
+                                tts.shutdown();
+                            } catch (Exception ignored) {
+                            }
                             if (callback != null) callback.onComplete(true);
                         }
                     }
@@ -133,7 +175,13 @@ public class BilingualSpeechHelper {
                     @Override
                     public void onError(String utteranceId) {
                         if (lastUtteranceId.equals(utteranceId) && settled.compareAndSet(false, true)) {
-                            tts.shutdown();
+                            synchronized (TTS_LOCK) {
+                                if (activeTts == tts) activeTts = null;
+                            }
+                            try {
+                                tts.shutdown();
+                            } catch (Exception ignored) {
+                            }
                             if (callback != null) callback.onComplete(false);
                         }
                     }
@@ -153,12 +201,16 @@ public class BilingualSpeechHelper {
                     tts.speak(seg.text, mode, params, batchId + "_" + i);
                 }
             } catch (Exception e) {
-                tts.shutdown();
+                stopActiveTts();
                 if (settled.compareAndSet(false, true) && callback != null) {
                     callback.onComplete(false);
                 }
             }
         });
+        synchronized (TTS_LOCK) {
+            holder[0] = created;
+            activeTts = created;
+        }
     }
 
     private static Voice pickVoice(TextToSpeech tts, String langPrefix, boolean isMale) {
