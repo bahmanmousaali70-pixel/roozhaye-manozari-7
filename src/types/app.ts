@@ -120,6 +120,12 @@ export interface GroundingLink {
   url: string;
 }
 
+export interface SyncedPhoneContact {
+  name: string;
+  phone: string;
+  persianPhonetic: string;
+}
+
 export interface MusicTrack {
   id: string;
   title: string;
@@ -129,6 +135,8 @@ export interface MusicTrack {
   streamUrl: string;
   durationSec?: number;
   isLiveStream?: boolean;
+  country?: string;
+  tags?: string;
   source: 'audius' | 'archive' | 'radio';
   externalUrl?: string;
 }

@@ -156,13 +156,51 @@ public class FinglishPhoneticHelper {
         WORD_MAP.put("wifi", "وای فای");
     }
 
+    public static String normalizePhoneKey(String rawPhone) {
+        if (rawPhone == null) return "";
+        StringBuilder digits = new StringBuilder();
+        for (int i = 0; i < rawPhone.length(); i++) {
+            char c = rawPhone.charAt(i);
+            if (c >= '0' && c <= '9') {
+                digits.append(c);
+            } else if (c >= '\u06F0' && c <= '\u06F9') {
+                digits.append((char) ('0' + (c - '\u06F0')));
+            } else if (c >= '\u0660' && c <= '\u0669') {
+                digits.append((char) ('0' + (c - '\u0660')));
+            }
+        }
+        String d = digits.toString();
+        if (d.length() > 10) {
+            return d.substring(d.length() - 10);
+        }
+        return d;
+    }
+
+    public static String resolvePhoneToSyncedName(Context context, String rawPhone) {
+        String key = normalizePhoneKey(rawPhone);
+        if (key.length() < 7) return null;
+        try {
+            SharedPreferences prefs = context.getSharedPreferences("rmz_native_prefs", Context.MODE_PRIVATE);
+            String jsonStr = prefs.getString("synced_phone_name_json", "{}");
+            JSONObject map = new JSONObject(jsonStr);
+            String found = map.optString(key, "").trim();
+            if (!found.isEmpty()) {
+                return found;
+            }
+        } catch (Exception ignored) {
+        }
+        return null;
+    }
+
     public static String resolveSenderDisplayName(Context context, String rawSender) {
         if (rawSender == null || rawSender.trim().isEmpty()) {
             return "";
         }
         String trimmed = rawSender.trim();
+        SharedPreferences prefs = context.getSharedPreferences("rmz_native_prefs", Context.MODE_PRIVATE);
+
+        // 1. User-curated VIP Callers list
         try {
-            SharedPreferences prefs = context.getSharedPreferences("rmz_native_prefs", Context.MODE_PRIVATE);
             String jsonStr = prefs.getString("callers_json", "[]");
             JSONArray arr = new JSONArray(jsonStr);
             for (int i = 0; i < arr.length(); i++) {
@@ -178,6 +216,26 @@ public class FinglishPhoneticHelper {
             }
         } catch (Exception ignored) {
         }
+
+        // 2. Synced phonebook learned Persian phonetics dictionary (offline / no VPN)
+        try {
+            String learnedStr = prefs.getString("learned_phonetics_json", "{}");
+            JSONObject learnedMap = new JSONObject(learnedStr);
+            String exactLearned = learnedMap.optString(trimmed.toLowerCase(), "").trim();
+            if (!exactLearned.isEmpty()) {
+                return exactLearned;
+            }
+            String phoneKey = normalizePhoneKey(trimmed);
+            if (phoneKey.length() >= 7) {
+                String syncedName = resolvePhoneToSyncedName(context, trimmed);
+                if (syncedName != null && !syncedName.isEmpty()) {
+                    String learnedForName = learnedMap.optString(syncedName.toLowerCase(), "").trim();
+                    return !learnedForName.isEmpty() ? learnedForName : transliterateToPersianPhonetic(syncedName);
+                }
+            }
+        } catch (Exception ignored) {
+        }
+
         return trimmed;
     }
 

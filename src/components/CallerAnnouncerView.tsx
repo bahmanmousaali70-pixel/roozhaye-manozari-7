@@ -1,5 +1,6 @@
-import React, {useState} from 'react';
+import React, {useMemo, useRef, useState} from 'react';
 import {
+  BookUser,
   CheckCircle2,
   Download,
   Loader2,
@@ -8,9 +9,13 @@ import {
   PhoneIncoming,
   PhoneOff,
   Plus,
+  RefreshCw,
+  Search,
   Smartphone,
   Sparkles,
   Trash2,
+  Upload,
+  UserPlus,
   Volume2,
 } from 'lucide-react';
 import {toPersianDigits, VOICE_PERSONAS} from '../data/persianLibrary';
@@ -24,6 +29,8 @@ import {
   getVoiceGender,
   isNativeAndroid,
   precacheNativeWav,
+  readDeviceContactsNative,
+  saveLearnedPhoneticsNative,
   testNativeCallAnnouncement,
   testNativeSmsAnnouncement,
 } from '../services/nativeAndroidBridge';
@@ -34,10 +41,11 @@ import {
   stopAllSpeech,
   unlockAudioPlayback,
 } from '../services/speechEngine';
-import type {AppSettings, CallerContact, VoiceName} from '../types/app';
+import type {AppSettings, CallerContact, SyncedPhoneContact, VoiceName} from '../types/app';
 
 interface CallerAnnouncerViewProps {
   callers: CallerContact[];
+  syncedContacts: SyncedPhoneContact[];
   isOnline: boolean;
   defaultVoice: VoiceName;
   speechRate: number;
@@ -46,8 +54,140 @@ interface CallerAnnouncerViewProps {
   onUpdateSettings: (patch: Partial<AppSettings>) => void;
   onAddCaller: (caller: Omit<CallerContact, 'id'>) => void;
   onDeleteCaller: (id: string) => void;
+  onSaveSyncedContacts: (contacts: SyncedPhoneContact[]) => void;
   onRefreshClips: () => Promise<void>;
   onStatusToast: (msg: string) => void;
+}
+
+const LOCAL_FINGLISH_WORDS: Record<string, string> = {
+  bahman: 'بَهمن',
+  mousaali: 'موساعلی',
+  musaali: 'موساعلی',
+  zari: 'زَری',
+  zahra: 'زهرا',
+  mehdi: 'مهدی',
+  mohammad: 'محمد',
+  ali: 'علی',
+  reza: 'رضا',
+  hossein: 'حسین',
+  sara: 'سارا',
+  maryam: 'مریم',
+  mina: 'مینا',
+  amir: 'امیر',
+  saeed: 'سعید',
+  omid: 'امید',
+  mom: 'مامان',
+  maman: 'مامان',
+  baba: 'بابا',
+  dad: 'پدر',
+  khanoom: 'خانم',
+  agha: 'آقا',
+  jan: 'جان',
+  joon: 'جون',
+  dr: 'دکتر',
+  mr: 'آقای',
+  mrs: 'خانم',
+  ms: 'خانم',
+};
+
+function localFinglishToPersian(input: string): string {
+  if (!/[A-Za-z]/.test(input)) return input;
+  return input
+    .replace(/[A-Za-z]+/g, (word) => {
+      const lower = word.toLowerCase();
+      if (LOCAL_FINGLISH_WORDS[lower]) return LOCAL_FINGLISH_WORDS[lower];
+      let s = lower
+        .replace(/sh/g, 'ش')
+        .replace(/ch/g, 'چ')
+        .replace(/kh/g, 'خ')
+        .replace(/gh/g, 'ق')
+        .replace(/zh/g, 'ژ')
+        .replace(/ph/g, 'ف')
+        .replace(/oo|ou/g, 'او')
+        .replace(/ee|ea/g, 'ای')
+        .replace(/ai|ay|ei|ey/g, 'اِی');
+      const map: Record<string, string> = {
+        a: 'آ', b: 'ب', c: 'ک', d: 'د', e: 'ِ', f: 'ف', g: 'گ', h: 'ه',
+        i: 'ی', j: 'ج', k: 'ک', l: 'ل', m: 'م', n: 'ن', o: 'و', p: 'پ',
+        q: 'ق', r: 'ر', s: 'س', t: 'ت', u: 'و', v: 'و', w: 'و', x: 'کس',
+        y: 'ی', z: 'ز',
+      };
+      let out = '';
+      for (let i = 0; i < s.length; i++) {
+        const ch = s[i];
+        out += map[ch] ?? ch;
+      }
+      return out || word;
+    })
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function decodeQuotedPrintableUtf8(str: string): string {
+  try {
+    const cleaned = str.replace(/=\r?\n/g, '');
+    const bytes: number[] = [];
+    for (let i = 0; i < cleaned.length; i++) {
+      if (cleaned[i] === '=' && /^[0-9A-Fa-f]{2}$/.test(cleaned.slice(i + 1, i + 3))) {
+        bytes.push(parseInt(cleaned.slice(i + 1, i + 3), 16));
+        i += 2;
+      } else {
+        bytes.push(cleaned.charCodeAt(i));
+      }
+    }
+    return new TextDecoder('utf-8').decode(new Uint8Array(bytes));
+  } catch {
+    return str;
+  }
+}
+
+function parseVcfContacts(vcfText: string): SyncedPhoneContact[] {
+  const unfolded = vcfText.replace(/\r?\n[ \t]/g, '');
+  const cards = unfolded.split(/BEGIN:VCARD/i);
+  const out: SyncedPhoneContact[] = [];
+  const seenPhones = new Set<string>();
+
+  for (const card of cards) {
+    if (!/END:VCARD/i.test(card)) continue;
+    const lines = card.split(/\r?\n/);
+    let rawName = '';
+    let fallbackN = '';
+    let firstPhone = '';
+
+    for (const line of lines) {
+      const colonIdx = line.indexOf(':');
+      if (colonIdx === -1) continue;
+      const keyPart = line.slice(0, colonIdx).toUpperCase();
+      let valPart = line.slice(colonIdx + 1).trim();
+      if (!valPart) continue;
+      if (keyPart.includes('ENCODING=QUOTED-PRINTABLE')) {
+        valPart = decodeQuotedPrintableUtf8(valPart);
+      }
+
+      if (keyPart === 'FN' || keyPart.startsWith('FN;')) {
+        rawName = valPart;
+      } else if ((keyPart === 'N' || keyPart.startsWith('N;')) && !fallbackN) {
+        const parts = valPart.split(';').map((p) => p.trim()).filter(Boolean);
+        fallbackN = parts.reverse().join(' ').trim();
+      } else if ((keyPart === 'TEL' || keyPart.startsWith('TEL;')) && !firstPhone) {
+        firstPhone = valPart;
+      }
+    }
+
+    const displayName = (rawName || fallbackN).trim();
+    if (!displayName) continue;
+    const digits = firstPhone.replace(/[^\d+]/g, '');
+    const key = digits ? digits.slice(-10) : displayName.toLowerCase();
+    if (seenPhones.has(key)) continue;
+    seenPhones.add(key);
+
+    out.push({
+      name: displayName,
+      phone: firstPhone,
+      persianPhonetic: localFinglishToPersian(displayName),
+    });
+  }
+  return out;
 }
 
 const TEMPLATES = [
@@ -60,6 +200,7 @@ const TEMPLATES = [
 
 export const CallerAnnouncerView: React.FC<CallerAnnouncerViewProps> = ({
   callers,
+  syncedContacts,
   isOnline,
   defaultVoice,
   speechRate,
@@ -68,6 +209,7 @@ export const CallerAnnouncerView: React.FC<CallerAnnouncerViewProps> = ({
   onUpdateSettings,
   onAddCaller,
   onDeleteCaller,
+  onSaveSyncedContacts,
   onRefreshClips,
   onStatusToast,
 }) => {
@@ -92,10 +234,228 @@ export const CallerAnnouncerView: React.FC<CallerAnnouncerViewProps> = ({
   const [chimeStyle, setChimeStyle] = useState<'gentle' | 'classic' | 'chime'>('chime');
   const [voiceName, setVoiceName] = useState<VoiceName>(defaultVoice);
 
-  // Active Incoming Call Simulator Modal
+  // Active Incoming Call Simulator Modal & Busy States
   const [simulatingCaller, setSimulatingCaller] = useState<CallerContact | null>(null);
   const [busyCallerId, setBusyCallerId] = useState<string | null>(null);
   const [precacheBusy, setPrecacheBusy] = useState(false);
+
+  // Phonebook Sync State
+  const [syncingPhonebook, setSyncingPhonebook] = useState(false);
+  const [precachePhonebookBusy, setPrecachePhonebookBusy] = useState(false);
+  const [contactSearch, setContactSearch] = useState('');
+  const vcfInputRef = useRef<HTMLInputElement | null>(null);
+
+  const filteredSyncedContacts = useMemo(() => {
+    const q = contactSearch.trim().toLowerCase();
+    if (!q) return syncedContacts;
+    return syncedContacts.filter(
+      (c) =>
+        c.name.toLowerCase().includes(q) ||
+        c.persianPhonetic.toLowerCase().includes(q) ||
+        c.phone.toLowerCase().includes(q)
+    );
+  }, [syncedContacts, contactSearch]);
+
+  const enrichAndPersistPhonebook = async (incomingList: SyncedPhoneContact[]) => {
+    if (incomingList.length === 0) {
+      onStatusToast('مخاطبی در دفترچه پیدا نشد.');
+      return;
+    }
+
+    // Preserve manual phonetic refinements already customized for matching names
+    const existingMap = new Map<string, string>();
+    for (const prev of syncedContacts) {
+      if (prev.name.trim() && prev.persianPhonetic.trim()) {
+        existingMap.set(prev.name.trim().toLowerCase(), prev.persianPhonetic.trim());
+      }
+    }
+
+    let learnedMap: Record<string, string> = {};
+    const uniqueNames = Array.from(new Set(incomingList.map((c) => c.name.trim()).filter(Boolean)));
+    const latinNames = uniqueNames.filter((n) => /[A-Za-z]/.test(n));
+
+    if (isOnline && latinNames.length > 0) {
+      for (let i = 0; i < latinNames.length; i += 80) {
+        const chunk = latinNames.slice(i, i + 80);
+        try {
+          const res = await fetch(apiUrl('/api/batch-phonetic'), {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({names: chunk}),
+          });
+          if (res.ok) {
+            const data = (await res.json()) as {phonetics?: Record<string, string>};
+            if (data.phonetics) {
+              learnedMap = {...learnedMap, ...data.phonetics};
+            }
+          }
+        } catch {
+          // fallback to deterministic transliteration
+        }
+      }
+    }
+
+    const enriched: SyncedPhoneContact[] = incomingList.map((c) => {
+      const lower = c.name.trim().toLowerCase();
+      const chosenPhonetic =
+        learnedMap[lower] ||
+        existingMap.get(lower) ||
+        c.persianPhonetic ||
+        localFinglishToPersian(c.name);
+      return {
+        name: c.name.trim(),
+        phone: c.phone.trim(),
+        persianPhonetic: chosenPhonetic,
+      };
+    });
+
+    onSaveSyncedContacts(enriched);
+
+    const pushMap: Record<string, string> = {};
+    for (const c of enriched) {
+      pushMap[c.name.toLowerCase()] = c.persianPhonetic;
+    }
+    await saveLearnedPhoneticsNative(pushMap);
+
+    const latinLearnedCount = enriched.filter((c) => /[A-Za-z]/.test(c.name)).length;
+    onStatusToast(
+      `${toPersianDigits(enriched.length)} مخاطب همگام‌سازی و تلفظ فارسی ${toPersianDigits(latinLearnedCount)} نام لاتین برای اعلام آفلاین بدون فیلترشکن یادگیری شد.`
+    );
+  };
+
+  const handleSyncPhonebook = async () => {
+    setSyncingPhonebook(true);
+    try {
+      if (isNativeAndroid()) {
+        const res = await readDeviceContactsNative();
+        if (!res.ok) {
+          if (res.permissionRequired) {
+            onStatusToast('لطفاً مجوز دسترسی به مخاطبین (Contacts) را تایید کنید و دوباره دکمه همگام‌سازی را بزنید.');
+          } else {
+            onStatusToast(res.error || 'خطا در خواندن دفترچه تلفن گوشی.');
+          }
+          return;
+        }
+        await enrichAndPersistPhonebook(res.contacts);
+        return;
+      }
+
+      // Browser fallback: Web Contact Picker API if supported, otherwise open .vcf picker
+      const navWithContacts = navigator as Navigator & {
+        contacts?: {
+          select: (props: string[], opts?: {multiple?: boolean}) => Promise<{name?: string[]; tel?: string[]}[]>;
+        };
+      };
+      if (navWithContacts.contacts?.select) {
+        const picked = await navWithContacts.contacts.select(['name', 'tel'], {multiple: true});
+        const mapped: SyncedPhoneContact[] = picked
+          .filter((p) => p.name?.[0])
+          .map((p) => ({
+            name: String(p.name![0]).trim(),
+            phone: String(p.tel?.[0] || '').trim(),
+            persianPhonetic: localFinglishToPersian(String(p.name![0])),
+          }));
+        if (mapped.length > 0) {
+          await enrichAndPersistPhonebook(mapped);
+          return;
+        }
+      }
+
+      vcfInputRef.current?.click();
+    } finally {
+      setSyncingPhonebook(false);
+    }
+  };
+
+  const handleVcfFileSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setSyncingPhonebook(true);
+    try {
+      const text = await file.text();
+      const parsed = parseVcfContacts(text);
+      if (parsed.length === 0) {
+        onStatusToast('مخاطب معتبری در فایل .vcf انتخاب‌شده پیدا نشد.');
+        return;
+      }
+      await enrichAndPersistPhonebook(parsed);
+    } catch {
+      onStatusToast('خطا در خواندن فایل مخاطبین.');
+    } finally {
+      setSyncingPhonebook(false);
+    }
+  };
+
+  const handleUpdateSyncedPhonetic = (indexInFullList: number, newPhonetic: string) => {
+    const updated = syncedContacts.map((item, i) =>
+      i === indexInFullList ? {...item, persianPhonetic: newPhonetic} : item
+    );
+    onSaveSyncedContacts(updated);
+  };
+
+  const handlePromoteToVip = (c: SyncedPhoneContact) => {
+    const alreadyExists = callers.some((x) => x.name.toLowerCase() === c.name.toLowerCase());
+    if (alreadyExists) {
+      onStatusToast(`«${c.name}» از قبل در لیست VIP وجود دارد.`);
+      return;
+    }
+    onAddCaller({
+      name: c.name,
+      latinAlias: /[A-Za-z]/.test(c.name) ? c.name : undefined,
+      persianPhonetic: c.persianPhonetic || c.name,
+      relation: 'دفترچه تلفن',
+      template: TEMPLATES[0],
+      repeatCount: 2,
+      chimeStyle: 'chime',
+      voiceName: defaultVoice,
+      favorite: true,
+    });
+    onStatusToast(`«${c.name}» با تلفظ «${c.persianPhonetic}» به مخاطبین VIP اضافه شد.`);
+  };
+
+  const handlePrecacheSyncedContacts = async () => {
+    if (syncedContacts.length === 0) return;
+    if (!isOnline) {
+      onStatusToast('برای ساخت فایل صوتی آفلاین گوینده، یک‌بار اتصال اینترنت و فیلترشکن لازم است.');
+      return;
+    }
+    setPrecachePhonebookBusy(true);
+    const slice = syncedContacts.slice(0, 50);
+    let readyCount = 0;
+    try {
+      for (const c of slice) {
+        const spokenName = c.persianPhonetic.trim() || c.name;
+        const script = `تماس ورودی از طرف ${spokenName}`;
+        const clipId = hashTextKey(script, defaultVoice);
+        let buffer = await getAudioClipBuffer(clipId);
+        if (!buffer) {
+          const res = await generateAndCacheGeminiWav({
+            clipId,
+            text: script,
+            title: `تماس: ${c.name}`,
+            category: 'caller',
+            voiceName: defaultVoice,
+            style: 'Clear fluent Tehran Persian caller announcer.',
+          });
+          if ('buffer' in res) buffer = res.buffer;
+          await new Promise((r) => setTimeout(r, 450));
+        }
+        if (buffer && isNativeAndroid()) {
+          await precacheNativeWav(script, defaultVoice, buffer);
+          // Also cache variant keyed by original Latin name so incoming call hits offline WAV immediately
+          await precacheNativeWav(`تماس ورودی از طرف ${c.name}`, defaultVoice, buffer);
+        }
+        if (buffer) readyCount++;
+      }
+      await onRefreshClips();
+      onStatusToast(
+        `صدای استودیویی ${toPersianDigits(readyCount)} مخاطب اول برای پخش بدون اینترنت و فیلترشکن ذخیره شد.`
+      );
+    } finally {
+      setPrecachePhonebookBusy(false);
+    }
+  };
 
   const handleTestSms = async () => {
     const sender = smsSender.trim() || 'مخاطب';
@@ -412,6 +772,156 @@ export const CallerAnnouncerView: React.FC<CallerAnnouncerViewProps> = ({
             <span>خواندن فرستنده و متن پیامک الان</span>
           </button>
         </div>
+      </section>
+
+      {/* Phonebook Sync & Offline Pronunciation Learning */}
+      <section className="rounded-2xl bg-white dark:bg-[#121E1C] border border-slate-200/80 dark:border-emerald-950/70 p-6 sm:p-7 space-y-5">
+        <input
+          ref={vcfInputRef}
+          type="file"
+          accept=".vcf,text/vcard,text/x-vcard,*/*"
+          onChange={handleVcfFileSelected}
+          className="hidden"
+        />
+
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+          <div className="space-y-1.5">
+            <div className="flex items-center gap-2 text-xs text-emerald-700 dark:text-emerald-400 font-semibold">
+              <BookUser className="w-4 h-4" />
+              <span>همگام‌سازی دفترچه تلفن با برنامه · بدون نیاز به فیلترشکن در تماس و پیامک</span>
+            </div>
+            <h2 className="text-lg sm:text-xl font-extrabold text-slate-900 dark:text-white">
+              یادگیری خودکار تلفظ فارسی تمام مخاطبین گوشی
+            </h2>
+            <p className="text-xs sm:text-sm leading-6 text-slate-600 dark:text-slate-300 max-w-3xl">
+              مخاطبین گوشی (به‌ویژه نام‌های انگلیسی و فینگلیش) را یک‌بار همگام‌سازی کنید تا تلفظ روان فارسی آن‌ها در حافظه داخلی گوشی ذخیره شود و موقع تماس یا پیامک، حتی بدون اینترنت و فیلترشکن، نام فرستنده کاملاً واضح خوانده شود.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+            <button
+              type="button"
+              disabled={syncingPhonebook}
+              onClick={handleSyncPhonebook}
+              className="min-h-[44px] px-4 rounded-xl bg-emerald-700 hover:bg-emerald-800 dark:bg-emerald-600 dark:hover:bg-emerald-500 text-white text-xs sm:text-sm font-semibold inline-flex items-center gap-2 cursor-pointer disabled:opacity-60"
+            >
+              {syncingPhonebook ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+              <span>{syncingPhonebook ? 'در حال یادگیری...' : 'همگام‌سازی دفترچه تلفن'}</span>
+            </button>
+
+            <button
+              type="button"
+              disabled={syncingPhonebook}
+              onClick={() => vcfInputRef.current?.click()}
+              className="min-h-[44px] px-3.5 rounded-xl border border-slate-200 dark:border-emerald-900 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-emerald-950/40 text-xs sm:text-sm font-medium inline-flex items-center gap-1.5 cursor-pointer"
+            >
+              <Upload className="w-4 h-4" />
+              <span>وارد کردن فایل .vcf</span>
+            </button>
+
+            {syncedContacts.length > 0 && (
+              <button
+                type="button"
+                disabled={precachePhonebookBusy}
+                onClick={handlePrecacheSyncedContacts}
+                className="min-h-[44px] px-3.5 rounded-xl bg-slate-900 dark:bg-emerald-900/70 hover:bg-slate-800 text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-60"
+              >
+                {precachePhonebookBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
+                <span>{precachePhonebookBusy ? 'در حال ذخیره...' : 'ذخیره صدای آفلاین ۵۰ مخاطب اول'}</span>
+              </button>
+            )}
+          </div>
+        </div>
+
+        {syncedContacts.length > 0 ? (
+          <div className="space-y-3 pt-1">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+              <div className="text-xs font-semibold text-slate-600 dark:text-slate-300 tabular-nums">
+                {toPersianDigits(syncedContacts.length)} مخاطب همگام‌سازی شده (تلفظ را می‌توانید مستقیماً ویرایش کنید)
+              </div>
+              <div className="relative w-full sm:w-72">
+                <Search className="w-4 h-4 text-slate-400 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <input
+                  type="text"
+                  value={contactSearch}
+                  onChange={(e) => setContactSearch(e.target.value)}
+                  placeholder="جستجوی نام، شماره یا تلفظ..."
+                  className="w-full min-h-[40px] pr-9 pl-3 rounded-xl border border-slate-200 dark:border-emerald-900 bg-slate-50/70 dark:bg-[#0B1312] text-xs text-slate-900 dark:text-white"
+                />
+              </div>
+            </div>
+
+            <div className="max-h-[340px] overflow-y-auto divide-y divide-slate-100 dark:divide-emerald-950/60 border border-slate-200/70 dark:border-emerald-900/60 rounded-xl px-3">
+              {filteredSyncedContacts.slice(0, 120).map((c) => {
+                const realIdx = syncedContacts.findIndex(
+                  (item) => item.name === c.name && item.phone === c.phone
+                );
+                return (
+                  <div
+                    key={`${c.name}_${c.phone}`}
+                    className="py-3 flex flex-col md:flex-row md:items-center justify-between gap-2.5"
+                  >
+                    <div className="min-w-0 md:w-5/12">
+                      <div className="text-sm font-bold text-slate-900 dark:text-white truncate font-latin">
+                        {c.name}
+                      </div>
+                      {c.phone && (
+                        <div className="text-[11px] font-mono-num text-slate-500 dark:text-slate-400">
+                          {c.phone}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="flex-1 flex items-center gap-2">
+                      <input
+                        type="text"
+                        value={c.persianPhonetic}
+                        onChange={(e) => {
+                          if (realIdx >= 0) handleUpdateSyncedPhonetic(realIdx, e.target.value);
+                        }}
+                        aria-label={`تلفظ فارسی ${c.name}`}
+                        placeholder="تلفظ فارسی روان..."
+                        className="flex-1 min-h-[38px] px-3 rounded-lg border border-slate-200 dark:border-emerald-900 bg-slate-50 dark:bg-[#0B1312] text-xs text-slate-900 dark:text-white"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          unlockAudioPlayback();
+                          const spoken = c.persianPhonetic.trim() || c.name;
+                          speakFluentPersian({
+                            text: `تماس ورودی از طرف ${spoken}`,
+                            title: `تلفظ: ${c.name}`,
+                            category: 'caller',
+                            voiceName: defaultVoice,
+                            rate: speechRate,
+                          });
+                        }}
+                        aria-label={`تست تلفظ ${c.name}`}
+                        className="min-h-[38px] px-2.5 rounded-lg bg-slate-100 dark:bg-emerald-950/60 hover:bg-emerald-100 text-emerald-700 dark:text-emerald-300 text-xs font-medium inline-flex items-center gap-1 cursor-pointer shrink-0"
+                      >
+                        <Volume2 className="w-3.5 h-3.5" />
+                        <span>شنیدن</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handlePromoteToVip(c)}
+                        aria-label={`افزودن ${c.name} به VIP`}
+                        className="min-h-[38px] px-2.5 rounded-lg border border-slate-200 dark:border-emerald-900 hover:bg-emerald-50 dark:hover:bg-emerald-950/50 text-slate-700 dark:text-slate-200 text-xs font-medium inline-flex items-center gap-1 cursor-pointer shrink-0"
+                      >
+                        <UserPlus className="w-3.5 h-3.5" />
+                        <span>VIP</span>
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ) : (
+          <div className="rounded-xl border border-dashed border-slate-200 dark:border-emerald-900/70 py-6 px-4 text-center text-xs sm:text-sm text-slate-500 dark:text-slate-400">
+            هنوز دفترچه تلفنی همگام‌سازی نشده است. روی «همگام‌سازی دفترچه تلفن» بزنید تا اسامی لاتین و فارسی گوشی شما به‌طور خودکار یاد گرفته شوند.
+          </div>
+        )}
       </section>
 
       {/* Quick Bilingual Tester + MIUI 14 Device Bridge */}

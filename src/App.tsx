@@ -62,6 +62,7 @@ import {
   openXiaomiOtherPermissions,
   precacheNativeWav,
   requestNativePermissionsAndMiuiSetup,
+  saveLearnedPhoneticsNative,
   setNativeKeepAliveService,
   syncAnnounceTogglesToNative,
   syncCallersToNative,
@@ -88,6 +89,7 @@ import type {
   NightDiscoveryResponse,
   OwnerRole,
   ScheduledAnnouncement,
+  SyncedPhoneContact,
 } from './types/app';
 
 const STORAGE_KEYS = {
@@ -95,6 +97,7 @@ const STORAGE_KEYS = {
   habits: 'rmz_habits_v1',
   gratitudes: 'rmz_gratitudes_v1',
   callers: 'rmz_callers_v1',
+  syncedContacts: 'rmz_synced_contacts_v1',
   settings: 'rmz_settings_v1',
   morningMsg: 'rmz_morning_msg_v1',
   schedules: 'rmz_schedules_v1',
@@ -155,6 +158,9 @@ export default function App() {
   );
   const [callers, setCallers] = useState<CallerContact[]>(() =>
     readJsonStorage<CallerContact[]>(STORAGE_KEYS.callers, DEFAULT_CALLERS)
+  );
+  const [syncedContacts, setSyncedContacts] = useState<SyncedPhoneContact[]>(() =>
+    readJsonStorage<SyncedPhoneContact[]>(STORAGE_KEYS.syncedContacts, [])
   );
   const [schedules, setSchedules] = useState<ScheduledAnnouncement[]>(() =>
     readJsonStorage<ScheduledAnnouncement[]>(STORAGE_KEYS.schedules, DEFAULT_SCHEDULES)
@@ -259,6 +265,19 @@ export default function App() {
       });
     });
   }, [callers]);
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEYS.syncedContacts, JSON.stringify(syncedContacts));
+    if (syncedContacts.length > 0) {
+      const map: Record<string, string> = {};
+      for (const c of syncedContacts) {
+        if (c.name.trim() && c.persianPhonetic.trim()) {
+          map[c.name.trim().toLowerCase()] = c.persianPhonetic.trim();
+        }
+      }
+      saveLearnedPhoneticsNative(map);
+    }
+  }, [syncedContacts]);
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEYS.morningMsg, JSON.stringify(morningMessage));
@@ -1103,6 +1122,7 @@ export default function App() {
         {activeTab === 'caller' && (
           <CallerAnnouncerView
             callers={callers}
+            syncedContacts={syncedContacts}
             isOnline={isOnline}
             defaultVoice={settings.defaultVoice}
             speechRate={settings.speechRate}
@@ -1111,6 +1131,7 @@ export default function App() {
             onUpdateSettings={handleUpdateSettings}
             onAddCaller={handleAddCaller}
             onDeleteCaller={handleDeleteCaller}
+            onSaveSyncedContacts={setSyncedContacts}
             onRefreshClips={refreshClips}
             onStatusToast={showToast}
           />

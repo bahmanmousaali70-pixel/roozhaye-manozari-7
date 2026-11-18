@@ -7,6 +7,7 @@ import {
   Disc3,
   ExternalLink,
   Film,
+  Globe,
   Loader2,
   MessageSquareHeart,
   Moon,
@@ -119,6 +120,17 @@ const MUSIC_MOOD_PRESETS = [
   'رادیو موسیقی لایت',
 ];
 
+type RadioCategory = 'iran' | 'world' | 'chill' | 'persian_music' | 'custom';
+
+const RADIO_CATEGORY_PRESETS: {id: Exclude<RadioCategory, 'custom'>; label: string}[] = [
+  {id: 'iran', label: 'رادیوهای ایران و فارسی'},
+  {id: 'world', label: 'برترین رادیوهای جهان'},
+  {id: 'chill', label: 'آرامش، پیانو و لایت'},
+  {id: 'persian_music', label: 'موسیقی ایرانی و سنتی'},
+];
+
+const RADIO_STORAGE_KEY = 'rmz_radio_stations_v1';
+
 function formatTrackClock(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) return '۰۰:۰۰';
   const total = Math.floor(seconds);
@@ -158,9 +170,22 @@ export const NightAndMessagesView: React.FC<NightAndMessagesViewProps> = ({
   const [copiedMsg, setCopiedMsg] = useState(false);
   const [msgVoice, setMsgVoice] = useState<VoiceName>(settings.defaultVoice);
 
-  // Night Online Music Playlist & Audio Player state
+  // Night Online Music Playlist & Live Iran/World Radio state
+  const [mediaTab, setMediaTab] = useState<'tracks' | 'radio'>('tracks');
   const [musicMood, setMusicMood] = useState('سنتی آرام و شجریان');
   const [musicBusy, setMusicBusy] = useState(false);
+  const [radioCategory, setRadioCategory] = useState<RadioCategory>('iran');
+  const [radioQuery, setRadioQuery] = useState('');
+  const [radioBusy, setRadioBusy] = useState(false);
+  const [radioStations, setRadioStations] = useState<MusicTrack[]>(() => {
+    try {
+      const raw = localStorage.getItem(RADIO_STORAGE_KEY);
+      return raw ? (JSON.parse(raw) as MusicTrack[]) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [activePlaybackGroup, setActivePlaybackGroup] = useState<'tracks' | 'radio'>('tracks');
   const [currentTrackIndex, setCurrentTrackIndex] = useState<number>(-1);
   const [isTrackPlaying, setIsTrackPlaying] = useState(false);
   const [isTrackLoading, setIsTrackLoading] = useState(false);
@@ -181,8 +206,11 @@ export const NightAndMessagesView: React.FC<NightAndMessagesViewProps> = ({
     return Array.isArray(nightMusicResult?.tracks) ? nightMusicResult.tracks : [];
   }, [nightMusicResult]);
 
+  const activeList = activePlaybackGroup === 'radio' ? radioStations : tracks;
+  const visibleList = mediaTab === 'radio' ? radioStations : tracks;
+
   const activeTrack =
-    currentTrackIndex >= 0 && currentTrackIndex < tracks.length ? tracks[currentTrackIndex] : null;
+    currentTrackIndex >= 0 && currentTrackIndex < activeList.length ? activeList[currentTrackIndex] : null;
 
   const stopMusicPlayback = () => {
     const el = audioRef.current;
@@ -209,6 +237,16 @@ export const NightAndMessagesView: React.FC<NightAndMessagesViewProps> = ({
   }, []);
 
   useEffect(() => {
+    if (radioStations.length > 0) {
+      try {
+        localStorage.setItem(RADIO_STORAGE_KEY, JSON.stringify(radioStations));
+      } catch {
+        // ignore quota issues
+      }
+    }
+  }, [radioStations]);
+
+  useEffect(() => {
     if (sleepRemainingSec === null) return;
     if (sleepRemainingSec <= 0) {
       stopMusicPlayback();
@@ -221,13 +259,21 @@ export const NightAndMessagesView: React.FC<NightAndMessagesViewProps> = ({
     return () => window.clearTimeout(t);
   }, [sleepRemainingSec, onStatusToast]);
 
-  const startTrackAtIndex = (index: number, list: MusicTrack[] = tracks) => {
+  const startTrackAtIndex = (
+    index: number,
+    list: MusicTrack[] = activeList,
+    groupOverride: 'tracks' | 'radio' = activePlaybackGroup
+  ) => {
     if (index < 0 || index >= list.length) return;
     const track = list[index];
     const el = audioRef.current;
     if (!el) return;
 
-    usedProxyForTrackRef.current = false;
+    const alreadyProxied = track.streamUrl.startsWith('/api/audio-proxy');
+    const resolvedSrc = track.streamUrl.startsWith('/api/') ? apiUrl(track.streamUrl) : track.streamUrl;
+
+    usedProxyForTrackRef.current = alreadyProxied;
+    setActivePlaybackGroup(groupOverride);
     setCurrentTrackIndex(index);
     setTrackTimeSec(0);
     setTrackDurationSec(track.durationSec ?? 0);
@@ -237,7 +283,7 @@ export const NightAndMessagesView: React.FC<NightAndMessagesViewProps> = ({
       setSleepRemainingSec(sleepMinutes * 60);
     }
 
-    el.src = track.streamUrl;
+    el.src = resolvedSrc;
     el.load();
     el.play()
       .then(() => {
@@ -245,8 +291,8 @@ export const NightAndMessagesView: React.FC<NightAndMessagesViewProps> = ({
         setIsTrackLoading(false);
       })
       .catch(() => {
-        // Retry automatically through same-origin server audio proxy
-        if (!usedProxyForTrackRef.current) {
+        // Retry automatically through same-origin server audio proxy unless already proxied
+        if (!usedProxyForTrackRef.current && !alreadyProxied) {
           usedProxyForTrackRef.current = true;
           el.src = apiUrl(`/api/audio-proxy?url=${encodeURIComponent(track.streamUrl)}`);
           el.load();
@@ -258,42 +304,44 @@ export const NightAndMessagesView: React.FC<NightAndMessagesViewProps> = ({
             .catch(() => {
               setIsTrackLoading(false);
               setIsTrackPlaying(false);
-              onStatusToast(`پخش قطعه «${track.title}» از مبدا مسدود بود؛ قطعه بعدی را امتحان کنید.`);
+              onStatusToast(`پخش «${track.title}» از مبدا در دسترس نبود؛ مورد بعدی را امتحان کنید.`);
             });
         } else {
           setIsTrackLoading(false);
           setIsTrackPlaying(false);
+          onStatusToast(`پخش «${track.title}» از مبدا در دسترس نبود؛ مورد بعدی را امتحان کنید.`);
         }
       });
   };
 
-  const togglePlayTrack = (index: number) => {
+  const togglePlayTrack = (index: number, group: 'tracks' | 'radio' = mediaTab) => {
     const el = audioRef.current;
     if (!el) return;
-    if (currentTrackIndex === index) {
+    const targetList = group === 'radio' ? radioStations : tracks;
+    if (currentTrackIndex === index && activePlaybackGroup === group) {
       if (isTrackPlaying) {
         el.pause();
         setIsTrackPlaying(false);
       } else {
         el.play()
           .then(() => setIsTrackPlaying(true))
-          .catch(() => startTrackAtIndex(index));
+          .catch(() => startTrackAtIndex(index, targetList, group));
       }
       return;
     }
-    startTrackAtIndex(index);
+    startTrackAtIndex(index, targetList, group);
   };
 
   const handlePrevTrack = () => {
-    if (tracks.length === 0) return;
-    const nextIdx = currentTrackIndex <= 0 ? tracks.length - 1 : currentTrackIndex - 1;
-    startTrackAtIndex(nextIdx);
+    if (activeList.length === 0) return;
+    const nextIdx = currentTrackIndex <= 0 ? activeList.length - 1 : currentTrackIndex - 1;
+    startTrackAtIndex(nextIdx, activeList, activePlaybackGroup);
   };
 
   const handleNextTrack = () => {
-    if (tracks.length === 0) return;
-    const nextIdx = currentTrackIndex + 1 >= tracks.length ? 0 : currentTrackIndex + 1;
-    startTrackAtIndex(nextIdx);
+    if (activeList.length === 0) return;
+    const nextIdx = currentTrackIndex + 1 >= activeList.length ? 0 : currentTrackIndex + 1;
+    startTrackAtIndex(nextIdx, activeList, activePlaybackGroup);
   };
 
   const handleAudioError = () => {
@@ -301,7 +349,8 @@ export const NightAndMessagesView: React.FC<NightAndMessagesViewProps> = ({
     const el = audioRef.current;
     if (!track || !el) return;
 
-    if (!usedProxyForTrackRef.current) {
+    const alreadyProxied = track.streamUrl.startsWith('/api/audio-proxy');
+    if (!usedProxyForTrackRef.current && !alreadyProxied) {
       usedProxyForTrackRef.current = true;
       el.src = apiUrl(`/api/audio-proxy?url=${encodeURIComponent(track.streamUrl)}`);
       el.load();
@@ -313,11 +362,11 @@ export const NightAndMessagesView: React.FC<NightAndMessagesViewProps> = ({
         .catch(() => {
           setIsTrackPlaying(false);
           setIsTrackLoading(false);
-          if (tracks.length > 1) {
-            const nextIdx = (currentTrackIndex + 1) % tracks.length;
-            startTrackAtIndex(nextIdx);
+          if (activeList.length > 1) {
+            const nextIdx = (currentTrackIndex + 1) % activeList.length;
+            startTrackAtIndex(nextIdx, activeList, activePlaybackGroup);
           } else {
-            onStatusToast(`پخش «${track.title}» ممکن نشد؛ با فیلترشکن یا قطعه دیگر امتحان کنید.`);
+            onStatusToast(`پخش «${track.title}» ممکن نشد؛ با ایستگاه یا قطعه دیگر امتحان کنید.`);
           }
         });
       return;
@@ -325,9 +374,45 @@ export const NightAndMessagesView: React.FC<NightAndMessagesViewProps> = ({
 
     setIsTrackPlaying(false);
     setIsTrackLoading(false);
-    if (tracks.length > 1 && currentTrackIndex >= 0) {
-      onStatusToast(`قطعه «${track.title}» در دسترس نبود؛ رفتن به قطعه بعدی...`);
-      startTrackAtIndex((currentTrackIndex + 1) % tracks.length);
+    if (activeList.length > 1 && currentTrackIndex >= 0) {
+      onStatusToast(`«${track.title}» در حال حاضر پاسخگو نبود؛ رفتن به مورد بعدی...`);
+      startTrackAtIndex((currentTrackIndex + 1) % activeList.length, activeList, activePlaybackGroup);
+    }
+  };
+
+  const handleFetchRadio = async (category: RadioCategory, customQueryText?: string) => {
+    if (!isOnline) {
+      onStatusToast('اتصال به ایستگاه‌های رادیویی زنده نیازمند اینترنت است.');
+      return;
+    }
+    setRadioCategory(category);
+    setRadioBusy(true);
+    try {
+      const res = await fetch(apiUrl('/api/radio-stations'), {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          category,
+          query: customQueryText ?? radioQuery.trim(),
+        }),
+      });
+      const data = (await res.json()) as {stations?: MusicTrack[]; error?: string};
+      if (!res.ok) throw new Error(data.error || 'خطا در دریافت رادیوها');
+      const list = Array.isArray(data.stations) ? data.stations : [];
+      setRadioStations(list);
+      if (activePlaybackGroup === 'radio') {
+        setCurrentTrackIndex(-1);
+        setIsTrackPlaying(false);
+      }
+      if (list.length > 0) {
+        onStatusToast(`${toPersianDigits(list.length)} ایستگاه رادیویی زنده آماده پخش شد.`);
+      } else {
+        onStatusToast('ایستگاهی با این عبارت پیدا نشد؛ دسته‌بندی دیگری را امتحان کنید.');
+      }
+    } catch (err) {
+      onStatusToast(err instanceof Error ? err.message : 'خطا در دریافت لیست رادیوها.');
+    } finally {
+      setRadioBusy(false);
     }
   };
 
@@ -658,16 +743,24 @@ export const NightAndMessagesView: React.FC<NightAndMessagesViewProps> = ({
 
       {/* Section 2 & 3: Real Playable Online Music Playlist + High-Rated Dubbed Movies/Series */}
       <section className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Real Online Music Playlist & Audio Player */}
+        {/* Real Online Music Playlist + Live Iran & World Radio */}
         <div className="lg:col-span-5 rounded-2xl bg-white dark:bg-[#121E1C] border border-slate-200/80 dark:border-emerald-950/70 p-6 space-y-5">
           <div className="flex items-start justify-between gap-2">
             <div>
               <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
-                <Music2 className="w-4 h-4 text-emerald-700 dark:text-emerald-400" />
-                <span>پخش مستقیم آنلاین آهنگ‌های کامل و ایستگاه‌های رادیو با تایمر خواب</span>
+                {mediaTab === 'radio' ? (
+                  <Globe className="w-4 h-4 text-emerald-700 dark:text-emerald-400" />
+                ) : (
+                  <Music2 className="w-4 h-4 text-emerald-700 dark:text-emerald-400" />
+                )}
+                <span>
+                  {mediaTab === 'radio'
+                    ? 'اتصال زنده به رادیوهای ایران، فارسی و برترین ایستگاه‌های جهان'
+                    : 'پخش مستقیم آنلاین آهنگ‌های کامل با تایمر خواب'}
+                </span>
               </div>
               <h2 className="mt-1.5 text-lg font-bold text-slate-900 dark:text-white">
-                پلی‌لیست موسیقی و آهنگ‌های واقعی (نسخه کامل)
+                {mediaTab === 'radio' ? 'رادیوهای ایران و جهان (پخش زنده)' : 'پلی‌لیست موسیقی و آهنگ‌های واقعی'}
               </h2>
             </div>
 
@@ -698,48 +791,135 @@ export const NightAndMessagesView: React.FC<NightAndMessagesViewProps> = ({
             </div>
           </div>
 
-          {/* Search Form */}
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              handleDiscoverNight('music');
-            }}
-            className="flex gap-2"
-          >
-            <input
-              type="text"
-              value={musicMood}
-              onChange={(e) => setMusicMood(e.target.value)}
-              placeholder="نام خواننده، آهنگ یا حال‌وهوا (مثلاً شجریان، پیانو)..."
-              className="flex-1 min-h-[44px] px-3.5 rounded-xl border border-slate-200 dark:border-emerald-900 bg-slate-50/70 dark:bg-[#0B1312] text-xs sm:text-sm text-slate-900 dark:text-white"
-            />
+          {/* Sub-Tabs: Full Songs vs Live Radio Iran & World */}
+          <div className="grid grid-cols-2 gap-1.5 p-1 rounded-xl bg-slate-100 dark:bg-emerald-950/60">
             <button
-              type="submit"
-              disabled={musicBusy}
-              className="min-h-[44px] px-4 rounded-xl bg-emerald-700 hover:bg-emerald-800 dark:bg-emerald-600 text-white text-xs sm:text-sm font-semibold flex items-center gap-1.5 cursor-pointer shrink-0 disabled:opacity-60"
+              type="button"
+              onClick={() => setMediaTab('tracks')}
+              className={`min-h-[40px] rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 cursor-pointer transition-colors ${
+                mediaTab === 'tracks'
+                  ? 'bg-white dark:bg-[#172724] text-slate-900 dark:text-white shadow-xs'
+                  : 'text-slate-600 dark:text-slate-300'
+              }`}
             >
-              {musicBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
-              <span>ساخت پلی‌لیست</span>
+              <Music2 className="w-3.5 h-3.5" />
+              <span>آهنگ‌های کامل</span>
             </button>
-          </form>
-
-          {/* Mood Quick Chips */}
-          <div className="flex flex-wrap gap-1.5">
-            {MUSIC_MOOD_PRESETS.map((preset) => (
-              <button
-                key={preset}
-                type="button"
-                disabled={musicBusy}
-                onClick={() => {
-                  setMusicMood(preset);
-                  handleDiscoverNight('music', preset);
-                }}
-                className="min-h-[34px] px-3 rounded-lg bg-slate-100 dark:bg-[#0B1312] hover:bg-emerald-50 dark:hover:bg-emerald-950/60 border border-slate-200/70 dark:border-emerald-900/60 text-[11px] font-medium text-slate-700 dark:text-slate-200 cursor-pointer transition-colors"
-              >
-                {preset}
-              </button>
-            ))}
+            <button
+              type="button"
+              onClick={() => {
+                setMediaTab('radio');
+                if (radioStations.length === 0 && !radioBusy && isOnline) {
+                  handleFetchRadio('iran');
+                }
+              }}
+              className={`min-h-[40px] rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 cursor-pointer transition-colors ${
+                mediaTab === 'radio'
+                  ? 'bg-white dark:bg-[#172724] text-emerald-800 dark:text-emerald-300 shadow-xs'
+                  : 'text-slate-600 dark:text-slate-300'
+              }`}
+            >
+              <Radio className="w-3.5 h-3.5" />
+              <span>رادیوهای ایران و جهان</span>
+            </button>
           </div>
+
+          {mediaTab === 'tracks' ? (
+            <>
+              {/* Song Search Form */}
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  handleDiscoverNight('music');
+                }}
+                className="flex gap-2"
+              >
+                <input
+                  type="text"
+                  value={musicMood}
+                  onChange={(e) => setMusicMood(e.target.value)}
+                  placeholder="نام خواننده، آهنگ یا حال‌وهوا (مثلاً شجریان، پیانو)..."
+                  className="flex-1 min-h-[44px] px-3.5 rounded-xl border border-slate-200 dark:border-emerald-900 bg-slate-50/70 dark:bg-[#0B1312] text-xs sm:text-sm text-slate-900 dark:text-white"
+                />
+                <button
+                  type="submit"
+                  disabled={musicBusy}
+                  className="min-h-[44px] px-4 rounded-xl bg-emerald-700 hover:bg-emerald-800 dark:bg-emerald-600 text-white text-xs sm:text-sm font-semibold flex items-center gap-1.5 cursor-pointer shrink-0 disabled:opacity-60"
+                >
+                  {musicBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+                  <span>ساخت پلی‌لیست</span>
+                </button>
+              </form>
+
+              {/* Mood Quick Chips */}
+              <div className="flex flex-wrap gap-1.5">
+                {MUSIC_MOOD_PRESETS.map((preset) => (
+                  <button
+                    key={preset}
+                    type="button"
+                    disabled={musicBusy}
+                    onClick={() => {
+                      setMusicMood(preset);
+                      handleDiscoverNight('music', preset);
+                    }}
+                    className="min-h-[34px] px-3 rounded-lg bg-slate-100 dark:bg-[#0B1312] hover:bg-emerald-50 dark:hover:bg-emerald-950/60 border border-slate-200/70 dark:border-emerald-900/60 text-[11px] font-medium text-slate-700 dark:text-slate-200 cursor-pointer transition-colors"
+                  >
+                    {preset}
+                  </button>
+                ))}
+              </div>
+            </>
+          ) : (
+            <>
+              {/* Live Radio Search Form */}
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  if (!radioQuery.trim()) {
+                    handleFetchRadio(radioCategory);
+                  } else {
+                    handleFetchRadio('custom', radioQuery.trim());
+                  }
+                }}
+                className="flex gap-2"
+              >
+                <input
+                  type="text"
+                  value={radioQuery}
+                  onChange={(e) => setRadioQuery(e.target.value)}
+                  placeholder="نام ایستگاه، کشور یا سبک (مثلاً ایران، تهران، Jazz، ترکیه)..."
+                  className="flex-1 min-h-[44px] px-3.5 rounded-xl border border-slate-200 dark:border-emerald-900 bg-slate-50/70 dark:bg-[#0B1312] text-xs sm:text-sm text-slate-900 dark:text-white"
+                />
+                <button
+                  type="submit"
+                  disabled={radioBusy}
+                  className="min-h-[44px] px-4 rounded-xl bg-emerald-700 hover:bg-emerald-800 dark:bg-emerald-600 text-white text-xs sm:text-sm font-semibold flex items-center gap-1.5 cursor-pointer shrink-0 disabled:opacity-60"
+                >
+                  {radioBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Radio className="w-4 h-4" />}
+                  <span>جستجوی رادیو</span>
+                </button>
+              </form>
+
+              {/* Radio Category Chips */}
+              <div className="flex flex-wrap gap-1.5">
+                {RADIO_CATEGORY_PRESETS.map((cat) => (
+                  <button
+                    key={cat.id}
+                    type="button"
+                    disabled={radioBusy}
+                    onClick={() => handleFetchRadio(cat.id, '')}
+                    className={`min-h-[34px] px-3 rounded-lg border text-[11px] font-medium cursor-pointer transition-colors ${
+                      radioCategory === cat.id
+                        ? 'bg-emerald-700 border-emerald-700 text-white'
+                        : 'bg-slate-100 dark:bg-[#0B1312] hover:bg-emerald-50 dark:hover:bg-emerald-950/60 border-slate-200/70 dark:border-emerald-900/60 text-slate-700 dark:text-slate-200'
+                    }`}
+                  >
+                    {cat.label}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
 
           {/* Active Track Audio Player */}
           {activeTrack && (
@@ -800,7 +980,7 @@ export const NightAndMessagesView: React.FC<NightAndMessagesViewProps> = ({
                 </button>
                 <button
                   type="button"
-                  onClick={() => togglePlayTrack(currentTrackIndex)}
+                  onClick={() => togglePlayTrack(currentTrackIndex, activePlaybackGroup)}
                   aria-label={isTrackPlaying ? 'توقف موقت' : 'پخش'}
                   className="min-w-[52px] min-h-[44px] px-5 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold flex items-center justify-center gap-1.5 cursor-pointer"
                 >
@@ -832,11 +1012,11 @@ export const NightAndMessagesView: React.FC<NightAndMessagesViewProps> = ({
             </div>
           )}
 
-          {/* Playable Tracklist */}
-          {tracks.length > 0 ? (
+          {/* Playable Tracklist or Radio Stations */}
+          {visibleList.length > 0 ? (
             <div className="space-y-2 max-h-[430px] overflow-y-auto pr-0.5">
-              {tracks.map((track, idx) => {
-                const isSelected = currentTrackIndex === idx;
+              {visibleList.map((track, idx) => {
+                const isSelected = currentTrackIndex === idx && activePlaybackGroup === mediaTab;
                 const playingNow = isSelected && isTrackPlaying;
                 return (
                   <div
@@ -849,7 +1029,7 @@ export const NightAndMessagesView: React.FC<NightAndMessagesViewProps> = ({
                   >
                     <button
                       type="button"
-                      onClick={() => togglePlayTrack(idx)}
+                      onClick={() => togglePlayTrack(idx, mediaTab)}
                       className="flex-1 min-w-0 flex items-center gap-3 text-right cursor-pointer min-h-[44px]"
                     >
                       <div className="w-11 h-11 rounded-lg bg-emerald-100 dark:bg-emerald-950 flex items-center justify-center overflow-hidden shrink-0">
@@ -860,6 +1040,8 @@ export const NightAndMessagesView: React.FC<NightAndMessagesViewProps> = ({
                             onError={() => setFailedArtIds((p) => ({...p, [track.id]: true}))}
                             className="w-full h-full object-cover"
                           />
+                        ) : track.isLiveStream || track.source === 'radio' ? (
+                          <Radio className="w-5 h-5 text-emerald-700 dark:text-emerald-400" />
                         ) : (
                           <Music2 className="w-5 h-5 text-emerald-700 dark:text-emerald-400" />
                         )}
@@ -909,7 +1091,9 @@ export const NightAndMessagesView: React.FC<NightAndMessagesViewProps> = ({
             </div>
           ) : (
             <div className="rounded-xl border border-dashed border-slate-200 dark:border-emerald-900/70 py-10 px-4 text-center text-xs sm:text-sm text-slate-500 dark:text-slate-400">
-              نام خواننده یا حال‌وهوای دلخواه را بنویسید (یا یکی از دکمه‌های بالا را بزنید) تا پلی‌لیست واقعی و قابل پخش ساخته شود.
+              {mediaTab === 'radio'
+                ? 'روی «رادیوهای ایران و فارسی» یا «برترین رادیوهای جهان» بزنید تا ایستگاه‌های زنده قابل پخش بارگذاری شوند.'
+                : 'نام خواننده یا حال‌وهوای دلخواه را بنویسید (یا یکی از دکمه‌های بالا را بزنید) تا پلی‌لیست واقعی و قابل پخش ساخته شود.'}
             </div>
           )}
         </div>

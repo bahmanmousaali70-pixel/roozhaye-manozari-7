@@ -15,10 +15,14 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Environment;
 import android.os.PowerManager;
+import android.provider.ContactsContract;
 import android.provider.MediaStore;
 import android.provider.OpenableColumns;
 import android.provider.Settings;
 import android.util.Base64;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
 
 import androidx.activity.result.ActivityResult;
 import androidx.core.app.ActivityCompat;
@@ -40,7 +44,9 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 @CapacitorPlugin(name = "RoozhayeNative")
 public class RoozhayeNativePlugin extends Plugin {
@@ -244,6 +250,128 @@ public class RoozhayeNativePlugin extends Plugin {
         prefs.edit().putString("callers_json", json).apply();
         JSObject ret = new JSObject();
         ret.put("count", json != null ? json.length() : 0);
+        call.resolve(ret);
+    }
+
+    @PluginMethod
+    public void saveLearnedPhonetics(PluginCall call) {
+        String phoneticsJson = call.getString("phoneticsJson", "{}");
+        SharedPreferences prefs = getContext().getSharedPreferences("rmz_native_prefs", Context.MODE_PRIVATE);
+        int count = 0;
+        try {
+            JSONObject incoming = new JSONObject(phoneticsJson != null ? phoneticsJson : "{}");
+            JSONObject existing = new JSONObject(prefs.getString("learned_phonetics_json", "{}"));
+            JSONArray keys = incoming.names();
+            if (keys != null) {
+                for (int i = 0; i < keys.length(); i++) {
+                    String k = keys.getString(i);
+                    String v = incoming.optString(k, "").trim();
+                    if (!k.trim().isEmpty() && !v.isEmpty()) {
+                        existing.put(k.trim().toLowerCase(), v);
+                        count++;
+                    }
+                }
+            }
+            prefs.edit().putString("learned_phonetics_json", existing.toString()).apply();
+        } catch (Exception ignored) {
+        }
+        JSObject ret = new JSObject();
+        ret.put("ok", true);
+        ret.put("count", count);
+        call.resolve(ret);
+    }
+
+    @PluginMethod
+    public void readDeviceContacts(PluginCall call) {
+        Context ctx = getContext();
+        if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED) {
+            if (getActivity() != null) {
+                ActivityCompat.requestPermissions(getActivity(), new String[]{Manifest.permission.READ_CONTACTS}, PERM_REQ_CODE);
+            }
+            JSObject ret = new JSObject();
+            ret.put("ok", false);
+            ret.put("permissionRequired", true);
+            ret.put("contactsJson", "[]");
+            call.resolve(ret);
+            return;
+        }
+
+        Map<String, JSONObject> byName = new LinkedHashMap<>();
+        JSONObject phoneToNameMap = new JSONObject();
+        JSONObject offlinePhoneticMap = new JSONObject();
+
+        String[] projection = new String[]{
+                ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
+                ContactsContract.CommonDataKinds.Phone.NUMBER
+        };
+        try (Cursor c = ctx.getContentResolver().query(
+                ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+                projection,
+                null,
+                null,
+                ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME + " ASC"
+        )) {
+            if (c != null) {
+                int nameIdx = c.getColumnIndex(ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME);
+                int numIdx = c.getColumnIndex(ContactsContract.CommonDataKinds.Phone.NUMBER);
+                while (c.moveToNext() && byName.size() < 1500) {
+                    String rawName = nameIdx >= 0 ? c.getString(nameIdx) : "";
+                    String rawPhone = numIdx >= 0 ? c.getString(numIdx) : "";
+                    String cleanName = rawName != null ? rawName.trim() : "";
+                    if (cleanName.isEmpty()) continue;
+
+                    String phoneKey = FinglishPhoneticHelper.normalizePhoneKey(rawPhone);
+                    if (phoneKey.length() >= 7) {
+                        phoneToNameMap.put(phoneKey, cleanName);
+                    }
+
+                    String nameKey = cleanName.toLowerCase();
+                    if (!byName.containsKey(nameKey)) {
+                        String phonetic = cleanName.matches("(?s).*[A-Za-z].*")
+                                ? FinglishPhoneticHelper.transliterateToPersianPhonetic(cleanName)
+                                : cleanName;
+                        JSONObject item = new JSONObject();
+                        item.put("name", cleanName);
+                        item.put("phone", rawPhone != null ? rawPhone.trim() : "");
+                        item.put("persianPhonetic", phonetic);
+                        byName.put(nameKey, item);
+                        offlinePhoneticMap.put(nameKey, phonetic);
+                    }
+                }
+            }
+        } catch (Exception ignored) {
+        }
+
+        SharedPreferences prefs = ctx.getSharedPreferences("rmz_native_prefs", Context.MODE_PRIVATE);
+        try {
+            // Preserve existing server-refined phonetics unless missing
+            JSONObject existingLearned = new JSONObject(prefs.getString("learned_phonetics_json", "{}"));
+            JSONArray keys = offlinePhoneticMap.names();
+            if (keys != null) {
+                for (int i = 0; i < keys.length(); i++) {
+                    String k = keys.getString(i);
+                    if (!existingLearned.has(k)) {
+                        existingLearned.put(k, offlinePhoneticMap.getString(k));
+                    } else {
+                        String savedVal = existingLearned.optString(k, "").trim();
+                        if (!savedVal.isEmpty() && byName.containsKey(k)) {
+                            byName.get(k).put("persianPhonetic", savedVal);
+                        }
+                    }
+                }
+            }
+            prefs.edit()
+                    .putString("synced_phone_name_json", phoneToNameMap.toString())
+                    .putString("learned_phonetics_json", existingLearned.toString())
+                    .apply();
+        } catch (Exception ignored) {
+        }
+
+        JSONArray arr = new JSONArray(byName.values());
+        JSObject ret = new JSObject();
+        ret.put("ok", true);
+        ret.put("count", arr.length());
+        ret.put("contactsJson", arr.toString());
         call.resolve(ret);
     }
 

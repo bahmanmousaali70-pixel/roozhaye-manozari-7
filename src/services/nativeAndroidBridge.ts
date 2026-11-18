@@ -1,6 +1,6 @@
 import {Capacitor, registerPlugin} from '@capacitor/core';
 import {VOICE_PERSONAS} from '../data/persianLibrary';
-import type {CallerContact, ScheduledAnnouncement} from '../types/app';
+import type {CallerContact, ScheduledAnnouncement, SyncedPhoneContact} from '../types/app';
 
 export interface NativeCapabilities {
   isNative: boolean;
@@ -71,6 +71,14 @@ interface RoozhayeNativePlugin {
     cancelled?: boolean;
     error?: string;
   }>;
+  readDeviceContacts(): Promise<{
+    ok: boolean;
+    permissionRequired?: boolean;
+    count?: number;
+    contactsJson?: string;
+    error?: string;
+  }>;
+  saveLearnedPhonetics(options: {phoneticsJson: string}): Promise<{ok: boolean; count?: number}>;
   speakNativeBilingual(options: {text: string; gender: 'male' | 'female'; rate: number}): Promise<{ok: boolean}>;
   testNativeCallAnnouncement(options: {name: string; script: string; gender: 'male' | 'female'; voiceName?: string}): Promise<{ok: boolean}>;
   testNativeSmsAnnouncement(options: {sender: string; body: string; gender: 'male' | 'female'; voiceName?: string}): Promise<{ok: boolean}>;
@@ -358,6 +366,72 @@ export async function testNativeSmsAnnouncement(
   try {
     const res = await RoozhayeNative.testNativeSmsAnnouncement({sender, body, gender, voiceName});
     return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function readDeviceContactsNative(): Promise<{
+  ok: boolean;
+  permissionRequired?: boolean;
+  count: number;
+  contacts: SyncedPhoneContact[];
+  error?: string;
+}> {
+  if (!isNativeAndroid()) {
+    return {ok: false, count: 0, contacts: [], error: 'فقط در نسخه اندروید (APK)'};
+  }
+  try {
+    const res = await RoozhayeNative.readDeviceContacts();
+    if (!res.ok) {
+      return {
+        ok: false,
+        permissionRequired: Boolean(res.permissionRequired),
+        count: 0,
+        contacts: [],
+        error: res.error,
+      };
+    }
+    const parsed = res.contactsJson
+      ? (JSON.parse(res.contactsJson) as {name?: string; phone?: string; persianPhonetic?: string}[])
+      : [];
+    const contacts: SyncedPhoneContact[] = parsed
+      .filter((item) => item && typeof item.name === 'string' && item.name.trim())
+      .map((item) => ({
+        name: String(item.name).trim(),
+        phone: String(item.phone || '').trim(),
+        persianPhonetic: String(item.persianPhonetic || item.name).trim(),
+      }));
+    return {
+      ok: true,
+      count: res.count ?? contacts.length,
+      contacts,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      count: 0,
+      contacts: [],
+      error: err instanceof Error ? err.message : 'خطا در خواندن دفترچه تلفن',
+    };
+  }
+}
+
+export async function saveLearnedPhoneticsNative(phonetics: Record<string, string>): Promise<boolean> {
+  if (!isNativeAndroid()) return false;
+  try {
+    const clean: Record<string, string> = {};
+    for (const [k, v] of Object.entries(phonetics)) {
+      const key = k.trim().toLowerCase();
+      const val = v.trim();
+      if (key && val) {
+        clean[key] = val;
+      }
+    }
+    const res = await RoozhayeNative.saveLearnedPhonetics({
+      phoneticsJson: JSON.stringify(clean),
+    });
+    return Boolean(res.ok);
   } catch {
     return false;
   }

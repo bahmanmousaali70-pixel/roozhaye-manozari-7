@@ -859,6 +859,86 @@ ${details ? `نکات یا خاطرات دلخواه برای اشاره در م
   }
 });
 
+app.post('/api/batch-phonetic', async (req, res) => {
+  const rawNames = Array.isArray(req.body?.names) ? (req.body.names as unknown[]) : [];
+  const cleanNames = Array.from(
+    new Set(
+      rawNames
+        .filter((n): n is string => typeof n === 'string')
+        .map((n) => n.trim())
+        .filter((n) => n.length > 0 && n.length <= 90)
+    )
+  ).slice(0, 160);
+
+  if (cleanNames.length === 0) {
+    res.json({phonetics: {}});
+    return;
+  }
+
+  const phonetics: Record<string, string> = {};
+  const latinNames: string[] = [];
+
+  for (const name of cleanNames) {
+    const lower = name.toLowerCase();
+    if (!/[A-Za-z]/.test(name)) {
+      phonetics[lower] = name;
+    } else {
+      phonetics[lower] = normalizeFinglishAndEnglishToPersian(name);
+      latinNames.push(name);
+    }
+  }
+
+  const ai = getAiClient();
+  if (ai && latinNames.length > 0) {
+    for (let i = 0; i < latinNames.length; i += 80) {
+      const chunk = latinNames.slice(i, i + 80);
+      try {
+        const response = await ai.models.generateContent({
+          model: 'gemini-4-hydrogen',
+          contents: `این فهرست نام‌های مخاطبین دفترچه تلفن است که بخشی یا تمام آن‌ها به خط انگلیسی یا فینگلیش نوشته شده‌اند.
+برای هر نام، تلفظ دقیق و بسیار روان آن را به خط فارسی آوایی (با اعراب کوتاه در صورت نیاز مثل بَهمن موساعلی، زَری جان، دکتر احمدی، سارا دِیزاین، بابا، مامان) برگردان تا موتور صوتی فارسی بدون خطا و بدون نیاز به انگلیسی بخواند:
+${JSON.stringify(chunk)}`,
+          config: {
+            thinkingConfig: {thinkingLevel: ThinkingLevel.LOW},
+            responseMimeType: 'application/json',
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: {
+                entries: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      raw: {type: Type.STRING, description: 'Exact input name string'},
+                      persianPhonetic: {type: Type.STRING, description: 'Fluent Persian phonetic spelling'},
+                    },
+                    required: ['raw', 'persianPhonetic'],
+                  },
+                },
+              },
+              required: ['entries'],
+            },
+          },
+        });
+        const parsed = JSON.parse((response.text ?? '{}').trim()) as {
+          entries?: {raw?: string; persianPhonetic?: string}[];
+        };
+        for (const item of parsed.entries ?? []) {
+          const raw = typeof item.raw === 'string' ? item.raw.trim().toLowerCase() : '';
+          const ph = typeof item.persianPhonetic === 'string' ? item.persianPhonetic.trim() : '';
+          if (raw && ph && !/[A-Za-z]{2,}/.test(ph)) {
+            phonetics[raw] = ph;
+          }
+        }
+      } catch (err) {
+        console.warn('Batch phonetic AI chunk fallback:', err instanceof Error ? err.message : err);
+      }
+    }
+  }
+
+  res.json({phonetics});
+});
+
 interface ServerMusicTrack {
   id: string;
   title: string;
@@ -868,8 +948,198 @@ interface ServerMusicTrack {
   streamUrl: string;
   durationSec?: number;
   isLiveStream?: boolean;
+  country?: string;
+  tags?: string;
   source: 'audius' | 'archive' | 'radio';
   externalUrl?: string;
+}
+
+function isSafePublicAudioUrl(rawUrl: string): URL | null {
+  try {
+    const parsed = new URL(rawUrl);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
+    const host = parsed.hostname.toLowerCase();
+    if (
+      !host ||
+      host === 'localhost' ||
+      host === '::1' ||
+      host === '[::1]' ||
+      host === '[::]' ||
+      host === '0.0.0.0' ||
+      host.endsWith('.local') ||
+      host.endsWith('.internal') ||
+      host.startsWith('127.') ||
+      host.startsWith('10.') ||
+      host.startsWith('192.168.') ||
+      host.startsWith('169.254.') ||
+      host.startsWith('[fe80:') ||
+      host.startsWith('fe80:') ||
+      /^172\.(1[6-9]|2\d|3[01])\./.test(host)
+    ) {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function wrapRadioStreamUrl(rawUrl: string): string {
+  const cleaned = rawUrl.trim();
+  if (cleaned.startsWith('http://')) {
+    return `/api/audio-proxy?url=${encodeURIComponent(cleaned)}`;
+  }
+  return cleaned;
+}
+
+interface RadioBrowserStation {
+  stationuuid?: string;
+  name?: string;
+  url?: string;
+  url_resolved?: string;
+  homepage?: string;
+  favicon?: string;
+  tags?: string;
+  country?: string;
+  countrycode?: string;
+  codec?: string;
+  bitrate?: number;
+  votes?: number;
+}
+
+const CURATED_IRAN_STATIONS: ServerMusicTrack[] = [
+  {
+    id: 'curated_navahang',
+    title: 'رادیو نواهنگ (موزیک پاپ و آرام ایرانی)',
+    artist: 'Radio Navahang · پخش زنده شبانه‌روزی',
+    streamUrl: 'https://nav.ritmo.ir:8443/navahang',
+    isLiveStream: true,
+    country: 'ایران / فارسی',
+    tags: 'persian, pop, iranian music',
+    source: 'radio',
+    externalUrl: 'https://navahang.com',
+  },
+  {
+    id: 'curated_hamrah',
+    title: 'رادیو همراه (موسیقی و گفتار فارسی)',
+    artist: 'Radio Hamrah · پخش زنده فارسی',
+    streamUrl: 'https://stream.radiohamrah.com:8443/radiohamrah',
+    isLiveStream: true,
+    country: 'فارسی',
+    tags: 'persian, talk, music',
+    source: 'radio',
+  },
+  {
+    id: 'curated_parsa',
+    title: 'رادیو پارسا (موسیقی ایرانی)',
+    artist: 'Radio Parsa · پخش زنده ایران',
+    streamUrl: wrapRadioStreamUrl('http://parsa.icdndhcp.com:18000/stream'),
+    isLiveStream: true,
+    country: 'ایران',
+    tags: 'persian, iranian',
+    source: 'radio',
+  },
+  {
+    id: 'curated_faaz',
+    title: 'رادیو فاز (آهنگ‌های جدید ایرانی)',
+    artist: 'Radio Faaz · موزیک فارسی',
+    streamUrl: wrapRadioStreamUrl('http://www.radiofaaz.com:8000/radiofaaz'),
+    isLiveStream: true,
+    country: 'ایران / فارسی',
+    tags: 'persian, pop',
+    source: 'radio',
+  },
+];
+
+const CURATED_WORLD_CHILL_STATIONS: ServerMusicTrack[] = [
+  {
+    id: 'curated_somafm_groove',
+    title: 'SomaFM Groove Salad (امبینت و آرامش)',
+    artist: 'آمریکا · پخش زنده بدون تبلیغ',
+    streamUrl: 'https://ice2.somafm.com/groovesalad-128-mp3',
+    isLiveStream: true,
+    country: 'United States',
+    tags: 'ambient, chillout, downtempo',
+    source: 'radio',
+    externalUrl: 'https://somafm.com/groovesalad/',
+  },
+  {
+    id: 'curated_smooth_chill',
+    title: 'Smooth Chill (موزیک آرامش‌بخش شبانه)',
+    artist: 'بریتانیا · پخش زنده لایت',
+    streamUrl: 'https://media-ssl.musicradio.com/SmoothChill',
+    isLiveStream: true,
+    country: 'United Kingdom',
+    tags: 'chill, lounge, relaxing',
+    source: 'radio',
+  },
+  {
+    id: 'curated_somafm_drone',
+    title: 'SomaFM Drone Zone (مدیتیشن و خواب آرام)',
+    artist: 'آمریکا · صدای فضایی و آرام',
+    streamUrl: 'https://ice1.somafm.com/dronezone-128-mp3',
+    isLiveStream: true,
+    country: 'United States',
+    tags: 'ambient, sleep, meditation',
+    source: 'radio',
+  },
+];
+
+async function queryRadioBrowser(queryPathAndParams: string): Promise<RadioBrowserStation[]> {
+  const hosts = ['https://de1.api.radio-browser.info', 'https://all.api.radio-browser.info'];
+  for (const host of hosts) {
+    try {
+      const r = await fetch(`${host}/json/stations/search?${queryPathAndParams}`, {
+        headers: {'User-Agent': 'RoozhayeManOZari/1.0'},
+        signal: AbortSignal.timeout(6500),
+      });
+      if (!r.ok) continue;
+      const data = await r.json();
+      if (Array.isArray(data) && data.length > 0) {
+        return data as RadioBrowserStation[];
+      }
+    } catch {
+      // try next mirror
+    }
+  }
+  return [];
+}
+
+function mapRadioStationsToTracks(stations: RadioBrowserStation[], maxItems = 24): ServerMusicTrack[] {
+  const out: ServerMusicTrack[] = [];
+  const seenStreams = new Set<string>();
+
+  for (const st of stations) {
+    const rawName = String(st?.name || '').replace(/\s+/g, ' ').trim();
+    const rawStream = String(st?.url_resolved || st?.url || '').trim();
+    if (!rawName || rawName.length > 90 || rawName.includes('?ref=')) continue;
+    if (rawStream.includes('.m3u8') || rawStream.includes('.pls')) continue;
+    const parsedUrl = isSafePublicAudioUrl(rawStream);
+    if (!parsedUrl) continue;
+
+    const dedupeKey = parsedUrl.href.toLowerCase();
+    if (seenStreams.has(dedupeKey)) continue;
+    seenStreams.add(dedupeKey);
+
+    const country = String(st.country || '').trim();
+    const bitrateInfo = st.bitrate && st.bitrate > 0 ? `${st.bitrate} kbps` : '';
+    const artistParts = ['پخش زنده رادیویی', country, bitrateInfo].filter(Boolean);
+
+    out.push({
+      id: `radio_${st.stationuuid || crypto.createHash('md5').update(dedupeKey).digest('hex').slice(0, 12)}`,
+      title: rawName,
+      artist: artistParts.join(' · '),
+      artworkUrl: st.favicon && String(st.favicon).startsWith('https://') ? String(st.favicon) : undefined,
+      streamUrl: wrapRadioStreamUrl(parsedUrl.href),
+      isLiveStream: true,
+      country: country || undefined,
+      tags: String(st.tags || '').slice(0, 120) || undefined,
+      source: 'radio',
+      externalUrl: st.homepage && String(st.homepage).startsWith('http') ? String(st.homepage) : undefined,
+    });
+    if (out.length >= maxItems) break;
+  }
+  return out;
 }
 
 function buildFallbackMusicQueries(persianMood: string): {
@@ -988,16 +1258,13 @@ async function fetchPlayableMusicPlaylist(moodOrGenre: string, ai: GoogleGenAI |
 
   const tracks: ServerMusicTrack[] = [];
 
-  const [audiusRes, archiveTracks, radioRes] = await Promise.allSettled([
+  const [audiusRes, archiveTracks, radioStations] = await Promise.allSettled([
     fetch(
       `https://api.audius.co/v1/tracks/search?query=${encodeURIComponent(audiusQuery)}&limit=10&app_name=roozhaye`,
       {signal: AbortSignal.timeout(6000)}
     ).then((r) => (r.ok ? r.json() : null)),
     fetchArchiveFullTracks(archiveQuery),
-    fetch(
-      `https://all.api.radio-browser.info/json/stations/search?limit=5&hidebroken=true&order=votes&reverse=true&tag=${encodeURIComponent(radioTag)}`,
-      {signal: AbortSignal.timeout(5500)}
-    ).then((r) => (r.ok ? r.json() : null)),
+    queryRadioBrowser(`limit=6&hidebroken=true&order=votes&reverse=true&tag=${encodeURIComponent(radioTag)}`),
   ]);
 
   if (audiusRes.status === 'fulfilled' && Array.isArray(audiusRes.value?.data)) {
@@ -1025,44 +1292,143 @@ async function fetchPlayableMusicPlaylist(moodOrGenre: string, ai: GoogleGenAI |
     }
   }
 
-  if (radioRes.status === 'fulfilled' && Array.isArray(radioRes.value)) {
-    for (const st of radioRes.value) {
-      const stream = st?.url_resolved || st?.url;
+  if (radioStations.status === 'fulfilled' && Array.isArray(radioStations.value)) {
+    const filtered = radioStations.value.filter((st) => {
       const tags = String(st?.tags || '').toLowerCase();
-      if (!stream || !String(stream).startsWith('https://')) continue;
-      if (tags.includes('news') || tags.includes('talk') || tags.includes('akhbar')) continue;
-      tracks.push({
-        id: `radio_${st.stationuuid || tracks.length}`,
-        title: String(st.name || 'رادیو موسیقی آرامش‌بخش').trim(),
-        artist: `پخش زنده پیوسته رادیویی${st.country ? ` · ${st.country}` : ''}`,
-        artworkUrl: st.favicon && String(st.favicon).startsWith('https://') ? String(st.favicon) : undefined,
-        streamUrl: String(stream),
-        isLiveStream: true,
-        source: 'radio',
-        externalUrl: st.homepage ? String(st.homepage) : undefined,
-      });
-    }
+      return !tags.includes('news') && !tags.includes('talk') && !tags.includes('akhbar');
+    });
+    tracks.push(...mapRadioStationsToTracks(filtered, 5));
   }
 
   return tracks.slice(0, 18);
 }
 
+app.post('/api/radio-stations', async (req, res) => {
+  const category = typeof req.body?.category === 'string' ? req.body.category : 'iran';
+  const rawQuery = typeof req.body?.query === 'string' ? req.body.query.trim() : '';
+
+  try {
+    let tracks: ServerMusicTrack[] = [];
+
+    if (category === 'custom' && rawQuery) {
+      let enQuery = rawQuery;
+      const persianDict: Record<string, string> = {
+        'ایران': 'iran',
+        'تهران': 'tehran',
+        'شیراز': 'shiraz',
+        'اصفهان': 'isfahan',
+        'مشهد': 'mashhad',
+        'تبریز': 'tabriz',
+        'فارسی': 'persian',
+        'سنتی': 'persian',
+        'پاپ': 'pop',
+        'پیانو': 'piano',
+        'آرام': 'chillout',
+        'جاز': 'jazz',
+        'کلاسیک': 'classical',
+        'ترکیه': 'turkey',
+        'فرانسه': 'france',
+        'آلمان': 'germany',
+        'آمریکا': 'usa',
+        'انگلیس': 'uk',
+      };
+      for (const [fa, en] of Object.entries(persianDict)) {
+        if (rawQuery.includes(fa)) {
+          enQuery = en;
+          break;
+        }
+      }
+      const ai = getAiClient();
+      if (ai && /[\u0600-\u06FF]/.test(rawQuery) && enQuery === rawQuery) {
+        try {
+          const r = await ai.models.generateContent({
+            model: 'gemini-4-hydrogen',
+            contents: `Translate this Persian radio station search query into 1 or 2 crisp English keywords or station name/country for Radio Browser search (no explanation): "${rawQuery}"`,
+            config: {thinkingConfig: {thinkingLevel: ThinkingLevel.LOW}},
+          });
+          const cand = (r.text ?? '').replace(/["'\n]/g, '').trim();
+          if (cand && cand.length <= 40) enQuery = cand;
+        } catch {
+          // keep fallback
+        }
+      }
+
+      const [byName, byTag, byCountry] = await Promise.all([
+        queryRadioBrowser(`name=${encodeURIComponent(enQuery)}&limit=15&hidebroken=true&order=votes&reverse=true`),
+        queryRadioBrowser(`tag=${encodeURIComponent(enQuery.toLowerCase())}&limit=15&hidebroken=true&order=votes&reverse=true`),
+        queryRadioBrowser(`country=${encodeURIComponent(enQuery)}&limit=12&hidebroken=true&order=votes&reverse=true`),
+      ]);
+      tracks = mapRadioStationsToTracks([...byName, ...byTag, ...byCountry], 24);
+    } else if (category === 'iran' || category === 'persian_music') {
+      const [irStations, persianTag, persianLang] = await Promise.all([
+        queryRadioBrowser('countrycode=IR&limit=25&hidebroken=true&order=votes&reverse=true'),
+        queryRadioBrowser('tag=persian&limit=20&hidebroken=true&order=votes&reverse=true'),
+        queryRadioBrowser('language=persian&limit=15&hidebroken=true&order=votes&reverse=true'),
+      ]);
+      const combined = [...irStations, ...persianTag, ...persianLang];
+      const mapped = mapRadioStationsToTracks(combined, 24);
+      // Merge curated Persian stations without duplicating streamUrl
+      const seen = new Set(mapped.map((m) => m.streamUrl));
+      const curatedToAdd = CURATED_IRAN_STATIONS.filter((c) => !seen.has(c.streamUrl));
+      tracks = [...curatedToAdd, ...mapped].slice(0, 26);
+    } else if (category === 'chill') {
+      const [ambient, lounge, piano] = await Promise.all([
+        queryRadioBrowser('tag=chillout&limit=14&hidebroken=true&order=votes&reverse=true'),
+        queryRadioBrowser('tag=ambient&limit=12&hidebroken=true&order=votes&reverse=true'),
+        queryRadioBrowser('tag=piano&limit=10&hidebroken=true&order=votes&reverse=true'),
+      ]);
+      const mapped = mapRadioStationsToTracks([...ambient, ...lounge, ...piano], 24);
+      const seen = new Set(mapped.map((m) => m.streamUrl));
+      tracks = [...CURATED_WORLD_CHILL_STATIONS.filter((c) => !seen.has(c.streamUrl)), ...mapped].slice(0, 26);
+    } else {
+      // 'world'
+      const [topGlobal, classicJazz] = await Promise.all([
+        queryRadioBrowser('limit=24&hidebroken=true&order=votes&reverse=true'),
+        queryRadioBrowser('tag=pop&limit=12&hidebroken=true&order=clickcount&reverse=true'),
+      ]);
+      tracks = mapRadioStationsToTracks([...topGlobal, ...classicJazz], 26);
+    }
+
+    res.json({
+      category,
+      stations: tracks,
+    });
+  } catch (err) {
+    console.error('Radio stations lookup error:', err);
+    res.json({
+      category,
+      stations: category === 'iran' || category === 'persian_music' ? CURATED_IRAN_STATIONS : CURATED_WORLD_CHILL_STATIONS,
+    });
+  }
+});
+
 app.get('/api/audio-proxy', async (req, res) => {
   const target = typeof req.query?.url === 'string' ? req.query.url : '';
-  if (!target.startsWith('https://')) {
+  const parsedUrl = isSafePublicAudioUrl(target);
+  if (!parsedUrl) {
     res.status(400).json({error: 'نشانی صوتی نامعتبر است.'});
     return;
   }
+
+  const controller = new AbortController();
+  const connectTimer = setTimeout(() => controller.abort(), 12000);
+  req.on('close', () => {
+    clearTimeout(connectTimer);
+    controller.abort();
+  });
+
   try {
     const reqHeaders: Record<string, string> = {'User-Agent': 'RoozhayeManOZari/1.0'};
     if (typeof req.headers.range === 'string') {
       reqHeaders.Range = req.headers.range;
     }
-    const upstream = await fetch(target, {
+    const upstream = await fetch(parsedUrl.href, {
       headers: reqHeaders,
       redirect: 'follow',
-      signal: AbortSignal.timeout(16000),
+      signal: controller.signal,
     });
+    clearTimeout(connectTimer);
+
     if ((!upstream.ok && upstream.status !== 206) || !upstream.body) {
       res.status(502).json({error: 'پخش جریان صوتی در دسترس نیست.'});
       return;
@@ -1075,11 +1441,18 @@ app.get('/api/audio-proxy', async (req, res) => {
     const contentRange = upstream.headers.get('content-range');
     if (contentRange) res.setHeader('Content-Range', contentRange);
     res.setHeader('Accept-Ranges', upstream.headers.get('accept-ranges') || 'bytes');
-    res.setHeader('Cache-Control', 'public, max-age=300');
+    res.setHeader('Cache-Control', contentLength ? 'public, max-age=300' : 'no-store');
+
     const nodeStream = Readable.fromWeb(upstream.body as unknown as Parameters<typeof Readable.fromWeb>[0]);
+    nodeStream.on('error', () => {
+      if (!res.writableEnded) res.end();
+    });
     nodeStream.pipe(res);
   } catch (err) {
-    console.warn('Audio proxy error:', err instanceof Error ? err.message : err);
+    clearTimeout(connectTimer);
+    if ((err as {name?: string})?.name !== 'AbortError') {
+      console.warn('Audio proxy error:', err instanceof Error ? err.message : err);
+    }
     if (!res.headersSent) {
       res.status(502).json({error: 'خطا در دریافت جریان صوتی.'});
     }
